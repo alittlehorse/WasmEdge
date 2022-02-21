@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 # Add the git command here to support describing version without the root CMakeList.
 find_program(GIT_CMD git)
@@ -37,6 +38,8 @@ configure_file(api/wasmedge/int128.h api/wasmedge/int128.h COPYONLY)
 configure_file(common/enum_configure.h api/wasmedge/enum_configure.h COPYONLY)
 configure_file(common/enum_errcode.h api/wasmedge/enum_errcode.h COPYONLY)
 configure_file(common/enum_types.h api/wasmedge/enum_types.h COPYONLY)
+configure_file(common/dense_enum_map.h api/wasmedge/dense_enum_map.h COPYONLY)
+configure_file(common/spare_enum_map.h api/wasmedge/spare_enum_map.h COPYONLY)
 unset(WASMEDGE_VERSION_STRING)
 unset(WASMEDGE_VERSION_LIST)
 unset(WASMEDGE_VERSION_MAJOR)

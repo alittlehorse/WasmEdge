@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #include "common/configure.h"
 #include "common/filesystem.h"
 #include "common/types.h"
@@ -8,8 +10,14 @@
 #include "po/argument_parser.h"
 #include "vm/vm.h"
 
+#include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
 
 int main(int Argc, const char *Argv[]) {
   namespace PO = WasmEdge::PO;
@@ -52,6 +60,8 @@ int main(int Argc, const char *Argv[]) {
   PO::Option<PO::Toggle> PropRefTypes(
       PO::Description("Disable Reference types proposal"sv));
   PO::Option<PO::Toggle> PropSIMD(PO::Description("Disable SIMD proposal"sv));
+  PO::Option<PO::Toggle> PropMultiMem(
+      PO::Description("Enable Multiple memories proposal"sv));
   PO::Option<PO::Toggle> PropAll(PO::Description("Enable all features"sv));
 
   PO::Option<PO::Toggle> ConfEnableInstructionCounting(PO::Description(
@@ -103,6 +113,7 @@ int main(int Argc, const char *Argv[]) {
            .add_option("disable-bulk-memory"sv, PropBulkMemOps)
            .add_option("disable-reference-types"sv, PropRefTypes)
            .add_option("disable-simd"sv, PropSIMD)
+           .add_option("enable-multi-memory"sv, PropMultiMem)
            .add_option("enable-all"sv, PropAll)
            .add_option("time-limit"sv, TimeLim)
            .add_option("gas-limit"sv, GasLim)
@@ -139,9 +150,13 @@ int main(int Argc, const char *Argv[]) {
   if (PropSIMD.value()) {
     Conf.removeProposal(WasmEdge::Proposal::SIMD);
   }
-  /// Left for the future proposals.
-  /// if (PropAll.value()) {
-  /// }
+  if (PropMultiMem.value()) {
+    Conf.addProposal(WasmEdge::Proposal::MultiMemories);
+  }
+  if (PropAll.value()) {
+    Conf.addProposal(WasmEdge::Proposal::MultiMemories);
+  }
+
   std::optional<std::chrono::system_clock::time_point> Timeout;
   if (TimeLim.value() > 0) {
     Timeout = std::chrono::system_clock::now() +

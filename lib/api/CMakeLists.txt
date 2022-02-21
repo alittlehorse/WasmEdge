@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 add_definitions(-DWASMEDGE_COMPILE_LIBRARY)
 if(WASMEDGE_BUILD_AOT_RUNTIME)
@@ -31,6 +32,8 @@ set(WASMEDGE_CAPI_HEADERS
   ${CMAKE_CURRENT_BINARY_DIR}/../../include/api/wasmedge/enum_errcode.h
   ${CMAKE_CURRENT_BINARY_DIR}/../../include/api/wasmedge/enum_types.h
   ${CMAKE_CURRENT_SOURCE_DIR}/../../include/api/wasmedge/int128.h
+  ${CMAKE_CURRENT_BINARY_DIR}/../../include/api/wasmedge/dense_enum_map.h
+  ${CMAKE_CURRENT_BINARY_DIR}/../../include/api/wasmedge/spare_enum_map.h
 )
 
 # Object library of the C API wrapper.
@@ -122,7 +125,7 @@ if(WASMEDGE_BUILD_STATIC_LIB)
 
     # Pack the tinfo.
     wasmedge_add_libs_component_command("tinfo" ${ZLIB_PATH})
-  
+
     wasmedge_add_static_lib_component_command(utilBlake3)
     wasmedge_add_static_lib_component_command(wasmedgeAOT)
   endif()

@@ -1,7 +1,6 @@
 # Rust
 
-Rust is one of the "first-class citizen" programming languages in the WebAssembly ecosystem. All WasmEdge extensions to WebAssembly also come with Rust APIs
-for developers.
+Rust is one of the "first-class citizen" programming languages in the WebAssembly ecosystem. All WasmEdge extensions to WebAssembly also come with Rust APIs for developers.
 In this chapter, we will show you how to compile your Rust applications to wasm bytecode and to run in the WasmEdge runtime.
 
 ## Prerequisites
@@ -32,13 +31,13 @@ fn main() {
 }
 ```
 
-### Build the WASM bytecode
+### Hello world: Build the WASM bytecode
 
 ```bash
-$ cargo build --target wasm32-wasi
+cargo build --target wasm32-wasi
 ```
 
-### Run the application from command line
+### Hello world: Run the application from command line
 
 We will use the `wasmedge` command to run the program.
 
@@ -64,13 +63,13 @@ pub fn add(a: i32, b: i32) -> i32 {
 }
 ```
 
-### Build the WASM bytecode
+### A simple function: Build the WASM bytecode
 
 ```bash
-$ cargo build --target wasm32-wasi
+cargo build --target wasm32-wasi
 ```
 
-### Run the application from command line
+### A simple function: Run the application from command line
 
 We will use `wasmedge` in reactor mode to run the program. We pass the function name and its input parameters as command line arguments.
 
@@ -79,7 +78,7 @@ $ wasmedge --reactor target/wasm32-wasi/debug/add.wasm add 2 2
 4
 ```
 
-### Pass complex call parameters
+## Pass complex call parameters
 
 Of course, in most cases, you will not call functions using CLI arguments.
 Instead, you will probably need to use a [language SDK from WasmEdge](../../embed.md)
@@ -88,8 +87,7 @@ Below are some SDK examples for complex call parameters and return values.
 
 * [Use wasm-bindgen in a Node.js host app](../embed/node.md#more-examples)
 * [Use wasm-bindgen in a Go host app](../embed/go/bindgen.md)
-* [Use direct memory passing in a Go host app]()
-
+* [Use direct memory passing in a Go host app](../embed/go/memory.md)
 
 ## Improve performance
 
@@ -122,5 +120,3 @@ $ wasmedge --reactor add.wasm add 2 2
 * [Networking socket](rust/networking.md) shows how to create networking applications for WebAssembly using the WasmEdge networking socket Rust SDK.
 * [Command interface](rust/command.md) shows how to create native command applications for WebAssembly using the Wasmedge command interface Rust SDK.
 * [Bindgen and rustwasmc](rust/bindgen.md) shows how to use the `rustwasmc` toolchain to compile Rust functions into WebAssembly, and then pass complex call parameters to the function from an external host application.
-
-

@@ -1,15 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #pragma once
 
 #include "common/filesystem.h"
 #include "host/wasi/error.h"
 #include "host/wasi/inode.h"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <variant>
+#include <utility>
 #include <vector>
 
 namespace WasmEdge {
@@ -55,7 +58,7 @@ public:
                                                   std::string Name,
                                                   std::string SystemPath);
 
-  bool isPreopened() const { return !Parent; }
+  bool isPreopened() const { return !Parent && !Name.empty(); }
 
   constexpr const std::string &name() const { return Name; }
 
@@ -530,7 +533,7 @@ public:
   pollOneoff(__wasi_size_t NSubscriptions) noexcept;
 
   static WasiExpect<void>
-  getAddrinfo(const char *NodeStr, const char *ServiceStr,
+  getAddrinfo(std::string_view Node, std::string_view Service,
               const __wasi_addrinfo_t &Hint, uint32_t MaxResLength,
               Span<__wasi_addrinfo_t *> WasiAddrinfoArray,
               Span<__wasi_sockaddr_t *> WasiSockaddrArray,
@@ -598,6 +601,29 @@ public:
   WasiExpect<void> sockShutdown(__wasi_sdflags_t SdFlags) const noexcept {
     return Node.sockShutdown(SdFlags);
   }
+
+  WasiExpect<void> sockGetOpt(__wasi_sock_opt_level_t SockOptLevel,
+                              __wasi_sock_opt_so_t SockOptName, void *FlagPtr,
+                              uint32_t *FlagSizePtr) const noexcept {
+    return Node.sockGetOpt(SockOptLevel, SockOptName, FlagPtr, FlagSizePtr);
+  }
+
+  WasiExpect<void> sockSetOpt(__wasi_sock_opt_level_t SockOptLevel,
+                              __wasi_sock_opt_so_t SockOptName, void *FlagPtr,
+                              uint32_t FlagSizePtr) const noexcept {
+    return Node.sockSetOpt(SockOptLevel, SockOptName, FlagPtr, FlagSizePtr);
+  }
+
+  WasiExpect<void> sockGetLoaclAddr(uint8_t *Address, uint32_t *AddrTypePtr,
+                                    uint32_t *PortPtr) const noexcept {
+    return Node.sockGetLoaclAddr(Address, AddrTypePtr, PortPtr);
+  }
+
+  WasiExpect<void> sockGetPeerAddr(uint8_t *Address, uint32_t *AddrTypePtr,
+                                   uint32_t *PortPtr) const noexcept {
+    return Node.sockGetPeerAddr(Address, AddrTypePtr, PortPtr);
+  }
+
   __wasi_rights_t fsRightsBase() const noexcept { return FsRightsBase; }
 
   __wasi_rights_t fsRightsInheriting() const noexcept {
@@ -674,7 +700,8 @@ public:
 
   WasiExpect<void> read(std::shared_ptr<VINode> Fd,
                         __wasi_userdata_t UserData) noexcept {
-    if (!Fd->can(__WASI_RIGHTS_POLL_FD_READWRITE | __WASI_RIGHTS_FD_READ)) {
+    if (!Fd->can(__WASI_RIGHTS_POLL_FD_READWRITE) &&
+        !Fd->can(__WASI_RIGHTS_FD_READ)) {
       return WasiUnexpect(__WASI_ERRNO_NOTCAPABLE);
     }
     return Poller::read(Fd->Node, UserData);

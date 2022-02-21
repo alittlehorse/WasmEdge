@@ -1,6 +1,6 @@
 //! Defines WasmEdge Loader struct.
 
-use crate::{error::check, utils, wasmedge, Config, Error, Module, WasmEdgeResult};
+use crate::{error::check, utils, wasmedge, Config, Module, WasmEdgeError, WasmEdgeResult};
 use std::path::Path;
 
 /// Struct of WasmEdge Loader.
@@ -20,17 +20,18 @@ impl Loader {
     /// # Error
     ///
     /// If fail to create a [`Loader`], then an error is returned.
-    pub fn create(config: Option<&Config>) -> WasmEdgeResult<Self> {
-        let config_ctx = match config {
-            Some(config) => config.ctx,
-            None => std::ptr::null(),
+    pub fn create(config: Option<Config>) -> WasmEdgeResult<Self> {
+        let ctx = match config {
+            Some(mut config) => {
+                let ctx = unsafe { wasmedge::WasmEdge_LoaderCreate(config.ctx) };
+                config.ctx = std::ptr::null_mut();
+                ctx
+            }
+            None => unsafe { wasmedge::WasmEdge_LoaderCreate(std::ptr::null_mut()) },
         };
-        let ctx = unsafe { wasmedge::WasmEdge_LoaderCreate(config_ctx) };
 
         match ctx.is_null() {
-            true => Err(Error::OperationError(String::from(
-                "fail to create Loader instance",
-            ))),
+            true => Err(WasmEdgeError::LoaderCreate),
             false => Ok(Self { ctx }),
         }
     }
@@ -45,13 +46,6 @@ impl Loader {
     ///
     /// If fail to load, then an error is returned.
     pub fn from_file(&self, path: impl AsRef<Path>) -> WasmEdgeResult<Module> {
-        if !path.as_ref().exists() {
-            return Err(Error::OperationError(format!(
-                "Not found file: {}",
-                path.as_ref().to_string_lossy()
-            )));
-        }
-
         let c_path = utils::path_to_cstring(path.as_ref())?;
         let mut mod_ctx = std::ptr::null_mut();
         unsafe {
@@ -63,14 +57,8 @@ impl Loader {
         }
 
         match mod_ctx.is_null() {
-            true => Err(Error::OperationError(format!(
-                "fail to load wasm module from {}",
-                path.as_ref().to_string_lossy()
-            ))),
-            false => Ok(Module {
-                ctx: mod_ctx,
-                registered: false,
-            }),
+            true => Err(WasmEdgeError::ModuleCreate),
+            false => Ok(Module { ctx: mod_ctx }),
         }
     }
 
@@ -83,25 +71,34 @@ impl Loader {
     /// # Error
     ///
     /// If fail to load, then an error is returned.
-    pub fn from_buffer(&self, buffer: &[u8]) -> WasmEdgeResult<Module> {
-        let mut mod_ctx = std::ptr::null_mut();
+    pub fn from_buffer(&self, buffer: impl AsRef<[u8]>) -> WasmEdgeResult<Module> {
+        let mut mod_ctx: *mut wasmedge::WasmEdge_ASTModuleContext = std::ptr::null_mut();
+
         unsafe {
+            let ptr = libc::malloc(buffer.as_ref().len());
+            let dst = ::core::slice::from_raw_parts_mut(
+                ptr.cast::<std::mem::MaybeUninit<u8>>(),
+                buffer.as_ref().len(),
+            );
+            let src = ::core::slice::from_raw_parts(
+                buffer.as_ref().as_ptr().cast::<std::mem::MaybeUninit<u8>>(),
+                buffer.as_ref().len(),
+            );
+            dst.copy_from_slice(src);
+
             check(wasmedge::WasmEdge_LoaderParseFromBuffer(
                 self.ctx,
                 &mut mod_ctx,
-                buffer.as_ptr(),
-                buffer.len() as u32,
+                ptr as *const u8,
+                buffer.as_ref().len() as u32,
             ))?;
+
+            libc::free(ptr as *mut libc::c_void);
         }
 
         match mod_ctx.is_null() {
-            true => Err(Error::OperationError(String::from(
-                "fail to load wasm module from the buffer",
-            ))),
-            false => Ok(Module {
-                ctx: mod_ctx,
-                registered: false,
-            }),
+            true => Err(WasmEdgeError::ModuleCreate),
+            false => Ok(Module { ctx: mod_ctx }),
         }
     }
 }
@@ -116,10 +113,13 @@ impl Drop for Loader {
 #[cfg(test)]
 mod tests {
     use super::Loader;
-    use crate::Config;
+    use crate::{
+        error::{CoreError, CoreLoadError},
+        Config, WasmEdgeError,
+    };
 
     #[test]
-    fn test_loader_create() {
+    fn test_loader() {
         // create a Loader instance without configuration
         let result = Loader::create(None);
         assert!(result.is_ok());
@@ -128,50 +128,47 @@ mod tests {
         let result = Config::create();
         assert!(result.is_ok());
         let config = result.unwrap();
-        let config = config.enable_referencetypes(true);
-        let result = Loader::create(Some(&config));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_loader_parse_from_file() {
-        // create a Loader instance with configuration
-        let result = Config::create();
-        assert!(result.is_ok());
-        let config = result.unwrap();
-        let config = config.enable_referencetypes(true);
-        let result = Loader::create(Some(&config));
+        let config = config.reference_types(true);
+        let result = Loader::create(Some(config));
         assert!(result.is_ok());
         let loader = result.unwrap();
 
-        let path =
-            std::path::PathBuf::from(env!("WASMEDGE_DIR")).join("test/api/apiTestData/test.wasm");
-        let result = loader.from_file(path);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert!(!module.ctx.is_null());
-    }
+        // load from file
+        {
+            let path = std::path::PathBuf::from(env!("WASMEDGE_DIR"))
+                .join("bindings/rust/wasmedge-sys/tests/data/fibonacci.wasm");
+            let result = loader.from_file(path);
+            assert!(result.is_ok());
+            let module = result.unwrap();
+            assert!(!module.ctx.is_null());
 
-    #[test]
-    fn test_loader_parse_from_buffer() {
-        // create a Loader instance with configuration
-        let result = Config::create();
-        assert!(result.is_ok());
-        let config = result.unwrap();
-        let config = config.enable_referencetypes(true);
-        let result = Loader::create(Some(&config));
-        assert!(result.is_ok());
-        let loader = result.unwrap();
+            let result = loader.from_file("not_exist_file");
+            assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err(),
+                WasmEdgeError::Core(CoreError::Load(CoreLoadError::IllegalPath))
+            );
+        }
 
-        let path =
-            std::path::PathBuf::from(env!("WASMEDGE_DIR")).join("test/api/apiTestData/test.wasm");
-        let result = std::fs::read(path);
-        assert!(result.is_ok());
-        let buffer = result.unwrap();
+        // load from buffer
+        {
+            let path = std::path::PathBuf::from(env!("WASMEDGE_DIR"))
+                .join("bindings/rust/wasmedge-sys/tests/data/fibonacci.wasm");
+            let result = std::fs::read(path);
+            assert!(result.is_ok());
+            let buffer = result.unwrap();
 
-        let result = loader.from_buffer(&buffer);
-        assert!(result.is_ok());
-        let module = result.unwrap();
-        assert!(!module.ctx.is_null());
+            let result = loader.from_buffer(&buffer);
+            assert!(result.is_ok());
+            let module = result.unwrap();
+            assert!(!module.ctx.is_null());
+
+            let result = loader.from_buffer(&[]);
+            assert!(result.is_err());
+            assert_eq!(
+                result.unwrap_err(),
+                WasmEdgeError::Core(CoreError::Load(CoreLoadError::UnexpectedEnd))
+            );
+        }
     }
 }

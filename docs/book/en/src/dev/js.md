@@ -6,23 +6,18 @@ As WebAssembly is increasingly used in the cloud, it is now a universal runtime 
 
 In cloud-native use cases, developers often want to use JavaScript to write business applications. That means we must now support JavaScript in WebAssembly. Furthermore, we should support calling C/C++ or Rust functions from JavaScript in a WebAssembly runtime to take advantage of WebAssembly's computational efficiency. The WasmEdge WebAssembly runtime allows you to do exactly that.
 
-<center>
-
-![](javascript.png)
-
-</center>
+![javascript](javascript.png)
 
 In this section, we will demonstrate how to run and enhance JavaScript in WasmEdge.
 
 * [Getting started](js/quickstart.md) demonstrates how to run simple JavaScript programs in WasmEdge.
-* [ES6 module](js/es6.md) shows how to run ES6 modules in WasmEdge.
-* [CommonJS module](js/cjs.md) shows how to run CommonJS modules in WasmEdge.
-* [NodeJS and NPM module](js/npm.md) shows how to run NPM modules in WasmEdge.
-* [React SSR](js/ssr.md) shows an example React SSR application in WasmEdge.
+* [Networking sockets](js/networking.md) shows how to create non-blocking (async) HTTP client and server applications using the WasmEdge networking extension and its JavaScript API.
+* [Fetch](js/fetch.md) shows how to use the popular `fetch` API to fetch content across the network asynchronously.
 * [TensorFlow](js/tensorflow.md) shows how to use WasmEdge's TensorFlow extension from its JavaScript API.
-* [Networking sockets](js/networking.md) shows how to create HTTP client and server applications using the WasmEdge networking extension and its JavaScript API.
-* [Async networking](js/async.md) shows how to improve HTTP server application performance by supporting asynchronous and non-blocking I/O.
-* [Use Rust to implement JS API](js/rust.md) discusses how to use Rust to implement and support a JavaScript API in WasmEdge.
+* [React SSR](js/ssr.md) shows example React SSR applications, including streaming SSR support.
+* [ES6 module](js/es6.md) shows how to incorporate ES6 modules in WasmEdge.
+* [NodeJS and NPM module](js/npm.md) shows how to incorporate NPM modules in WasmEdge.
+* [Use Rust to implement JS API](js/rust.md) discusses how to use Rust to implement and support a JavaScript API.
 
 ## A note on v8
 
@@ -32,14 +27,10 @@ First of all, QuickJS is a lot smaller than v8. In fact, it only takes 1/40 (or 
 
 Second, for most business logic applications, raw performance is not critical. The application may have computationally intensive tasks, such as AI inference on the fly. WasmEdge allows the QuickJS applications to drop to high-performance WebAssembly for these tasks while it is not so easy with v8 to add such extensions modules.
 
-Third, WasmEdge is [itself an OCI compliant container](../kubernetes.md). 
-It is secure by default, supports resource isolation, and can be managed by container tools to run side by side
-with Linux containers in a single k8s cluster.
+Third, WasmEdge is [itself an OCI compliant container](../kubernetes.md).
+It is secure by default, supports resource isolation, and can be managed by container tools to run side by side with Linux containers in a single k8s cluster.
 
 Finally, v8 has a very large attack surface and requires [major efforts](https://blog.cloudflare.com/mitigating-spectre-and-other-security-threats-the-cloudflare-workers-security-model/) to run securely in a public cloud environment.
 It is known that [many JavaScript security issues arise from JIT](https://www.theregister.com/2021/08/06/edge_super_duper_security_mode/). Maybe turning off JIT in the cloud-native environment is not such a bad idea!
 
-In the end, running v8 in a cloud-native environment often requires a full stack of software tools consisting of 
-"Linux container + guest OS + node or deno + v8", which makes it
-much heavier and slower than a simple WasmEdge + QuickJS container runtime.
-
+In the end, running v8 in a cloud-native environment often requires a full stack of software tools consisting of "Linux container + guest OS + node or deno + v8", which makes it much heavier and slower than a simple WasmEdge + QuickJS container runtime.

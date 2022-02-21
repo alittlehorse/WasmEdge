@@ -2,13 +2,16 @@
 
 use super::wasmedge;
 use crate::{
-    error::{check, Error, WasmEdgeResult},
-    string::StringRef,
-    Config, ImportObj, Module, Statistics, Store, Value,
+    error::{check, WasmEdgeError, WasmEdgeResult},
+    types::WasmEdgeString,
+    Config, ImportObject, Module, Statistics, Store, Value,
 };
-use std::ptr;
 
 /// Struct of WasmEdge Executor.
+///
+/// [`Executor`] defines an execution environment for both WASM and compiled WASM. It works based on the
+/// [Store](crate::Store).
+#[derive(Debug)]
 pub struct Executor {
     ctx: *mut wasmedge::WasmEdge_ExecutorContext,
 }
@@ -24,51 +27,65 @@ impl Executor {
     /// # Error
     ///
     /// If fail to create a [`Executor`], then an error is returned.
-    pub fn create(conf: Option<&Config>, stat: Option<&mut Statistics>) -> WasmEdgeResult<Self> {
-        let conf = match conf {
-            Some(conf) => conf.ctx,
-            None => ptr::null(),
+    pub fn create(config: Option<Config>, stat: Option<Statistics>) -> WasmEdgeResult<Self> {
+        let ctx = match config {
+            Some(mut config) => match stat {
+                Some(mut stat) => {
+                    let ctx = unsafe { wasmedge::WasmEdge_ExecutorCreate(config.ctx, stat.ctx) };
+                    config.ctx = std::ptr::null_mut();
+                    stat.ctx = std::ptr::null_mut();
+                    ctx
+                }
+                None => {
+                    let ctx = unsafe {
+                        wasmedge::WasmEdge_ExecutorCreate(config.ctx, std::ptr::null_mut())
+                    };
+                    config.ctx = std::ptr::null_mut();
+                    ctx
+                }
+            },
+            None => match stat {
+                Some(mut stat) => {
+                    let ctx = unsafe {
+                        wasmedge::WasmEdge_ExecutorCreate(std::ptr::null_mut(), stat.ctx)
+                    };
+                    stat.ctx = std::ptr::null_mut();
+                    ctx
+                }
+                None => unsafe {
+                    wasmedge::WasmEdge_ExecutorCreate(std::ptr::null_mut(), std::ptr::null_mut())
+                },
+            },
         };
-        let stat_ctx = match stat {
-            Some(stat) => {
-                let stat_ctx = stat.ctx;
-                stat.ctx = std::ptr::null_mut();
-                stat_ctx
-            }
-            None => ptr::null_mut(),
-        };
-        let raw = unsafe { wasmedge::WasmEdge_ExecutorCreate(conf, stat_ctx) };
-        match raw.is_null() {
-            true => Err(Error::OperationError(String::from(
-                "fail to create Executor instance",
-            ))),
-            false => Ok(Executor { ctx: raw }),
+
+        match ctx.is_null() {
+            true => Err(WasmEdgeError::ExecutorCreate),
+            false => Ok(Executor { ctx }),
         }
     }
 
-    /// Registers and instantiates a WasmEdge [`ImportObj`] into a [`Store`].
+    /// Registers and instantiates a WasmEdge [`ImportObject`] into a [`Store`].
     ///
     /// # Arguments
     ///
-    /// - `store` specifies the target [`Store`], into which the given [`ImportObj`] is registered.
+    /// - `store` specifies the target [`Store`], into which the given [`ImportObject`] is registered.
     ///
-    /// - `imp_obj` specifies the WasmEdge [`ImportObj`] to be registered.
+    /// - `import` specifies the WasmEdge [`ImportObject`] to be registered.
     ///
     /// # Error
     ///
-    /// If fail to register the given [`ImportObj`], then an error is returned.
+    /// If fail to register the given [`ImportObject`], then an error is returned.
     pub fn register_import_object(
         self,
         store: &mut Store,
-        imp_obj: &ImportObj,
+        mut import: ImportObject,
     ) -> WasmEdgeResult<Self> {
         unsafe {
             check(wasmedge::WasmEdge_ExecutorRegisterImport(
-                self.ctx,
-                store.ctx,
-                imp_obj.ctx,
+                self.ctx, store.ctx, import.ctx,
             ))?;
         }
+        import.ctx = std::ptr::null_mut();
         Ok(self)
     }
 
@@ -91,50 +108,51 @@ impl Executor {
     pub fn register_module(
         self,
         store: &mut Store,
-        ast_mod: &mut Module,
+        mut module: Module,
         mod_name: impl AsRef<str>,
     ) -> WasmEdgeResult<Self> {
+        let mod_name: WasmEdgeString = mod_name.as_ref().into();
         unsafe {
             check(wasmedge::WasmEdge_ExecutorRegisterModule(
                 self.ctx,
                 store.ctx,
-                ast_mod.ctx,
-                wasmedge::WasmEdge_String::from(StringRef::from(mod_name.as_ref())),
+                module.ctx,
+                mod_name.as_raw(),
             ))?;
-            ast_mod.ctx = std::ptr::null_mut();
-            ast_mod.registered = true;
+            module.ctx = std::ptr::null_mut();
         }
         Ok(self)
     }
 
-    /// Instantiates a WasmEdge AST [`Module`] into a [`Store`].
+    /// Instantiates a WasmEdge AST [Module](crate::Module) into a [Store](crate::Store).
     ///
-    /// Instantiates the WasmEdge AST [`Module`] as an active anonymous module in the [`Store`].
+    /// Instantiates the WasmEdge AST [Module](crate::Module) as an active anonymous module in the
+    /// [Store](crate::Store). Notice that when a new module is instantiated into the [Store](crate::Store), the old
+    /// instantiated module is removed; in addition, ensure that the [imports](crate::ImportObject) are registered into
+    /// the [Store](crate::Store).
     ///
     ///
     /// # Arguments
     ///
-    /// - `store` specifies the [`Store`], in which the [`Module`] to be instantiated is stored.
+    /// - `store` specifies the [Store](crate::Store), in which the [Module](crate::Module) to be instantiated
+    /// is stored.
     ///
-    /// - `ast_mod` specifies the target [`Module`] to be instantiated.
+    /// - `ast_mod` specifies the target [Module](crate::Module) to be instantiated.
     ///
     /// # Error
     ///
-    /// If fail to instantiate the given [`Module`], then an error is returned.
-    pub fn instantiate(self, store: &mut Store, ast_mod: &mut Module) -> WasmEdgeResult<Self> {
+    /// If fail to instantiate the given [Module](crate::Module), then an error is returned.
+    pub fn instantiate(self, store: &mut Store, mut module: Module) -> WasmEdgeResult<Self> {
         unsafe {
             check(wasmedge::WasmEdge_ExecutorInstantiate(
-                self.ctx,
-                store.ctx,
-                ast_mod.ctx,
+                self.ctx, store.ctx, module.ctx,
             ))?;
-            ast_mod.ctx = std::ptr::null_mut();
-            ast_mod.registered = false;
         }
+        module.ctx = std::ptr::null_mut();
         Ok(self)
     }
 
-    /// Invokes a WASM function in the anonymous [`Module`].
+    /// Invokes a WASM function in the anonymous [`Module`], and returns the results.
     ///
     /// After instantiating a WasmEdge [`Module`], the [`Module`] is registered as an
     /// anonymous module in the [`Store`]; then, you can repeatedly call this function
@@ -154,34 +172,26 @@ impl Executor {
     /// # Error
     ///
     /// If fail to invoke the function specified by `func_name`, then an error is returned.
-    pub fn invoke_function(
+    pub fn run_func(
         &self,
         store: &Store,
         func_name: impl AsRef<str>,
-        params: impl Iterator<Item = Value>,
-    ) -> WasmEdgeResult<impl Iterator<Item = Value>> {
-        let raw_params = params
-            .map(wasmedge::WasmEdge_Value::from)
-            .collect::<Vec<_>>();
+        params: impl IntoIterator<Item = Value>,
+    ) -> WasmEdgeResult<Vec<Value>> {
+        store.contains_func(func_name.as_ref())?;
+
+        let raw_params = params.into_iter().map(|x| x.as_raw()).collect::<Vec<_>>();
 
         // get the length of the function's returns
-        let returns_len = store
-            .find_func(func_name.as_ref())
-            .ok_or_else(|| {
-                Error::OperationError(format!(
-                    "fail to find the function named '{}'",
-                    func_name.as_ref()
-                ))
-            })?
-            .get_type()?
-            .returns_len();
+        let returns_len = store.find_func(func_name.as_ref())?.ty()?.returns_len();
         let mut returns = Vec::with_capacity(returns_len);
 
+        let func_name: WasmEdgeString = func_name.as_ref().into();
         unsafe {
             check(wasmedge::WasmEdge_ExecutorInvoke(
                 self.ctx,
                 store.ctx,
-                StringRef::from(func_name.as_ref()).into(),
+                func_name.as_raw(),
                 raw_params.as_ptr(),
                 raw_params.len() as u32,
                 returns.as_mut_ptr(),
@@ -190,10 +200,10 @@ impl Executor {
             returns.set_len(returns_len);
         }
 
-        Ok(returns.into_iter().map(Into::into))
+        Ok(returns.into_iter().map(Into::into).collect::<Vec<_>>())
     }
 
-    /// Invokes a registered WASM function by its module name and function name.
+    /// Invokes a registered WASM function by its module name and function name, and returns the results.
     ///
     /// # Arguments
     ///
@@ -209,36 +219,32 @@ impl Executor {
     ///
     /// If fail to invoke the target registered function, then an error is returned.
     ///
-    pub fn invoke_registered_function(
+    pub fn run_func_registered(
         &self,
         store: &Store,
         mod_name: impl AsRef<str>,
         func_name: impl AsRef<str>,
-        params: impl Iterator<Item = Value>,
-    ) -> WasmEdgeResult<impl Iterator<Item = Value>> {
-        let raw_params = params
-            .map(wasmedge::WasmEdge_Value::from)
-            .collect::<Vec<_>>();
+        params: impl IntoIterator<Item = Value>,
+    ) -> WasmEdgeResult<Vec<Value>> {
+        store.contains_reg_func(mod_name.as_ref(), func_name.as_ref())?;
+
+        let raw_params = params.into_iter().map(|x| x.as_raw()).collect::<Vec<_>>();
 
         // get the length of the function's returns
         let returns_len = store
-            .find_func_registered(mod_name.as_ref(), func_name.as_ref())
-            .ok_or_else(|| {
-                Error::OperationError(format!(
-                    "fail to find the registered function named '{}'",
-                    func_name.as_ref()
-                ))
-            })?
-            .get_type()?
+            .find_func_registered(mod_name.as_ref(), func_name.as_ref())?
+            .ty()?
             .returns_len();
         let mut returns = Vec::with_capacity(returns_len);
 
+        let mod_name: WasmEdgeString = mod_name.as_ref().into();
+        let func_name: WasmEdgeString = func_name.as_ref().into();
         unsafe {
             check(wasmedge::WasmEdge_ExecutorInvokeRegistered(
                 self.ctx,
                 store.ctx,
-                StringRef::from(mod_name.as_ref()).into(),
-                StringRef::from(func_name.as_ref()).into(),
+                mod_name.as_raw(),
+                func_name.as_raw(),
                 raw_params.as_ptr(),
                 raw_params.len() as u32,
                 returns.as_mut_ptr(),
@@ -247,13 +253,68 @@ impl Executor {
             returns.set_len(returns_len);
         }
 
-        Ok(returns.into_iter().map(Into::into))
+        Ok(returns.into_iter().map(Into::into).collect::<Vec<_>>())
     }
 }
 impl Drop for Executor {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
             unsafe { wasmedge::WasmEdge_ExecutorDelete(self.ctx) }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Config, Statistics};
+
+    #[test]
+    fn test_executor_create() {
+        {
+            // create an Executor context without configuration and statistics
+            let result = Executor::create(None, None);
+            assert!(result.is_ok());
+            let executor = result.unwrap();
+            assert!(!executor.ctx.is_null());
+        }
+
+        {
+            // create an Executor context with a given configuration
+            let result = Config::create();
+            assert!(result.is_ok());
+            let config = result.unwrap();
+            let result = Executor::create(Some(config), None);
+            assert!(result.is_ok());
+            let executor = result.unwrap();
+            assert!(!executor.ctx.is_null());
+        }
+
+        {
+            // create an Executor context with a given statistics
+            let result = Statistics::create();
+            assert!(result.is_ok());
+            let stat = result.unwrap();
+            let result = Executor::create(None, Some(stat));
+            assert!(result.is_ok());
+            let executor = result.unwrap();
+            assert!(!executor.ctx.is_null());
+        }
+
+        {
+            // create an Executor context with the given configuration and statistics.
+            let result = Config::create();
+            assert!(result.is_ok());
+            let config = result.unwrap();
+
+            let result = Statistics::create();
+            assert!(result.is_ok());
+            let stat = result.unwrap();
+
+            let result = Executor::create(Some(config), Some(stat));
+            assert!(result.is_ok());
+            let executor = result.unwrap();
+            assert!(!executor.ctx.is_null());
         }
     }
 }

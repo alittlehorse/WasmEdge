@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #pragma once
 
 #include "common/defines.h"
@@ -10,15 +12,17 @@
 #include "host/wasi/vinode.h"
 #include "wasi/api.hpp"
 
-#include <csignal>
+#include <algorithm>
+#include <array>
 #include <cstdint>
-#include <cstring>
+#include <memory>
 #include <mutex>
 #include <random>
 #include <shared_mutex>
 #include <string>
-#include <thread>
+#include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace WasmEdge {
@@ -40,7 +44,7 @@ public:
 
   void fini() noexcept;
 
-  WasiExpect<void> getAddrInfo(const char *Node, const char *Service,
+  WasiExpect<void> getAddrInfo(std::string_view Node, std::string_view Service,
                                const __wasi_addrinfo_t &Hint,
                                uint32_t MaxResLength,
                                Span<__wasi_addrinfo_t *> WasiAddrinfoArray,
@@ -224,7 +228,7 @@ public:
   ///
   /// @return Nothing or WASI error
   WasiExpect<void> fdClose(__wasi_fd_t Fd) noexcept {
-    std::unique_lock<std::shared_mutex> lock(FdMutex);
+    std::unique_lock Lock(FdMutex);
     if (auto It = FdMap.find(Fd); It == FdMap.end()) {
       return WasiUnexpect(__WASI_ERRNO_BADF);
     } else if (It->second->isPreopened()) {
@@ -497,7 +501,7 @@ public:
   /// @param[in] To The file descriptor to overwrite.
   /// @return Nothing or WASI error
   WasiExpect<void> fdRenumber(__wasi_fd_t Fd, __wasi_fd_t To) noexcept {
-    std::unique_lock<std::shared_mutex> lock(FdMutex);
+    std::unique_lock Lock(FdMutex);
     if (auto It = FdMap.find(Fd); It == FdMap.end()) {
       return WasiUnexpect(__WASI_ERRNO_BADF);
     } else if (auto It2 = FdMap.find(To); It2 == FdMap.end()) {
@@ -958,6 +962,52 @@ public:
     }
   }
 
+  WasiExpect<void> sockGetOpt(__wasi_fd_t Fd,
+                              __wasi_sock_opt_level_t SockOptLevel,
+                              __wasi_sock_opt_so_t SockOptName, void *FlagPtr,
+                              uint32_t *FlagSizePtr) const noexcept {
+    auto Node = getNodeOrNull(Fd);
+    if (unlikely(!Node)) {
+      return WasiUnexpect(__WASI_ERRNO_BADF);
+    } else {
+      return Node->sockGetOpt(SockOptLevel, SockOptName, FlagPtr, FlagSizePtr);
+    }
+  }
+
+  WasiExpect<void> sockSetOpt(__wasi_fd_t Fd,
+                              __wasi_sock_opt_level_t SockOptLevel,
+                              __wasi_sock_opt_so_t SockOptName, void *FlagPtr,
+                              uint32_t FlagSizePtr) const noexcept {
+    auto Node = getNodeOrNull(Fd);
+    if (unlikely(!Node)) {
+      return WasiUnexpect(__WASI_ERRNO_BADF);
+    } else {
+      return Node->sockSetOpt(SockOptLevel, SockOptName, FlagPtr, FlagSizePtr);
+    }
+  }
+
+  WasiExpect<void> sockGetLoaclAddr(__wasi_fd_t Fd, uint8_t *Address,
+                                    uint32_t *AddrTypePtr,
+                                    uint32_t *PortPtr) const noexcept {
+    auto Node = getNodeOrNull(Fd);
+    if (unlikely(!Node)) {
+      return WasiUnexpect(__WASI_ERRNO_BADF);
+    } else {
+      return Node->sockGetLoaclAddr(Address, AddrTypePtr, PortPtr);
+    }
+  }
+
+  WasiExpect<void> sockGetPeerAddr(__wasi_fd_t Fd, uint8_t *Address,
+                                   uint32_t *AddrTypePtr,
+                                   uint32_t *PortPtr) const noexcept {
+    auto Node = getNodeOrNull(Fd);
+    if (unlikely(!Node)) {
+      return WasiUnexpect(__WASI_ERRNO_BADF);
+    } else {
+      return Node->sockGetPeerAddr(Address, AddrTypePtr, PortPtr);
+    }
+  }
+
   static std::string randomFilename() noexcept {
     using namespace std::literals;
     static constexpr const auto Charset =
@@ -986,7 +1036,7 @@ private:
   friend class EVPoller;
 
   std::shared_ptr<VINode> getNodeOrNull(__wasi_fd_t Fd) const {
-    std::shared_lock<std::shared_mutex> lock(FdMutex);
+    std::shared_lock Lock(FdMutex);
     if (auto It = FdMap.find(Fd); It != FdMap.end()) {
       return It->second;
     }
@@ -1001,7 +1051,7 @@ private:
     __wasi_fd_t NewFd;
     while (!Success) {
       NewFd = Distribution(Engine);
-      std::unique_lock<std::shared_mutex> lock(FdMutex);
+      std::unique_lock Lock(FdMutex);
       Success = FdMap.emplace(NewFd, Node).second;
     }
     return NewFd;

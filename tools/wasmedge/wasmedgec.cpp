@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #include "aot/compiler.h"
 #include "common/configure.h"
 #include "common/filesystem.h"
@@ -6,7 +8,14 @@
 #include "loader/loader.h"
 #include "po/argument_parser.h"
 #include "validator/validator.h"
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <memory>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
 
 int main(int Argc, const char *Argv[]) {
   namespace PO = WasmEdge::PO;
@@ -51,6 +60,8 @@ int main(int Argc, const char *Argv[]) {
   PO::Option<PO::Toggle> PropRefTypes(
       PO::Description("Disable Reference types proposal"sv));
   PO::Option<PO::Toggle> PropSIMD(PO::Description("Disable SIMD proposal"sv));
+  PO::Option<PO::Toggle> PropMultiMem(
+      PO::Description("Enable Multiple memories proposal"sv));
   PO::Option<PO::Toggle> PropAll(PO::Description("Enable all features"sv));
 
   auto Parser = PO::ArgumentParser();
@@ -71,6 +82,7 @@ int main(int Argc, const char *Argv[]) {
            .add_option("disable-bulk-memory"sv, PropBulkMemOps)
            .add_option("disable-reference-types"sv, PropRefTypes)
            .add_option("disable-simd"sv, PropSIMD)
+           .add_option("enable-multi-memory"sv, PropMultiMem)
            .add_option("enable-all"sv, PropAll)
            .parse(Argc, Argv)) {
     return EXIT_FAILURE;
@@ -102,9 +114,12 @@ int main(int Argc, const char *Argv[]) {
   if (PropSIMD.value()) {
     Conf.removeProposal(WasmEdge::Proposal::SIMD);
   }
-  /// Left for the future proposals.
-  /// if (PropAll.value()) {
-  /// }
+  if (PropMultiMem.value()) {
+    Conf.addProposal(WasmEdge::Proposal::MultiMemories);
+  }
+  if (PropAll.value()) {
+    Conf.addProposal(WasmEdge::Proposal::MultiMemories);
+  }
 
   std::filesystem::path InputPath = std::filesystem::absolute(WasmName.value());
   std::filesystem::path OutputPath = std::filesystem::absolute(SoName.value());

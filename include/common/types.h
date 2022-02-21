@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/common/types.h - Types definition ------------------------===//
 //
 // Part of the WasmEdge Project.
@@ -13,6 +15,7 @@
 #pragma once
 
 #include "common/enum_types.h"
+#include "common/errcode.h"
 #include "common/int128.h"
 #include "common/variant.h"
 
@@ -24,12 +27,14 @@
 namespace WasmEdge {
 
 namespace {
+
 /// Remove const, reference, and volitile.
 template <typename T>
 using RemoveCVRefT = std::remove_cv_t<std::remove_reference_t<T>>;
+
 } // namespace
 
-/// >>>>>>>> Type definitions >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+// >>>>>>>> Type definitions >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 using Byte = uint8_t;
 
@@ -78,7 +83,24 @@ using ValVariant =
             FuncRef, ExternRef>;
 
 /// BlockType definition.
-using BlockType = std::variant<ValType, uint32_t>;
+struct BlockType {
+  bool IsValType;
+  union {
+    ValType Type;
+    uint32_t Idx;
+  } Data;
+  BlockType() = default;
+  BlockType(ValType VType) { setData(VType); }
+  BlockType(uint32_t Idx) { setData(Idx); }
+  void setData(ValType VType) {
+    IsValType = true;
+    Data.Type = VType;
+  }
+  void setData(uint32_t Idx) {
+    IsValType = false;
+    Data.Idx = Idx;
+  }
+};
 
 /// NumType and RefType conversions.
 inline constexpr ValType ToValType(const NumType Val) noexcept {
@@ -88,9 +110,9 @@ inline constexpr ValType ToValType(const RefType Val) noexcept {
   return static_cast<ValType>(Val);
 }
 
-/// <<<<<<<< Type definitions <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+// <<<<<<<< Type definitions <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-/// >>>>>>>> Const expressions to checking value types >>>>>>>>>>>>>>>>>>>>>>>>>
+// >>>>>>>> Const expressions to checking value types >>>>>>>>>>>>>>>>>>>>>>>>>>
 
 /// Return true if Wasm unsign (uint32_t and uint64_t).
 template <typename T>
@@ -186,9 +208,9 @@ toUnsigned(T Val) {
   return static_cast<MakeWasmUnsignedT<T>>(Val);
 }
 
-/// <<<<<<<< Const expressions to checking value types <<<<<<<<<<<<<<<<<<<<<<<<<
+// <<<<<<<< Const expressions to checking value types <<<<<<<<<<<<<<<<<<<<<<<<<<
 
-/// >>>>>>>> Template to get value type from type >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+// >>>>>>>> Template to get value type from type >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 template <typename T> inline ValType ValTypeFromType() noexcept;
 
@@ -223,9 +245,9 @@ template <> inline ValType ValTypeFromType<ExternRef>() noexcept {
   return ValType::ExternRef;
 }
 
-/// <<<<<<<< Template to get value type from type <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+// <<<<<<<< Template to get value type from type <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-/// >>>>>>>> Const expression to generate value from value type >>>>>>>>>>>>>>>>
+// >>>>>>>> Const expression to generate value from value type >>>>>>>>>>>>>>>>>
 
 inline constexpr ValVariant ValueFromType(ValType Type) noexcept {
   switch (Type) {
@@ -243,14 +265,14 @@ inline constexpr ValVariant ValueFromType(ValType Type) noexcept {
   case ValType::ExternRef:
     return UnknownRef();
   case ValType::None:
-    __builtin_unreachable();
+  default:
+    assumingUnreachable();
   }
-  __builtin_unreachable();
 }
 
-/// <<<<<<<< Const expression to generate value from value type <<<<<<<<<<<<<<<<
+// <<<<<<<< Const expression to generate value from value type <<<<<<<<<<<<<<<<<
 
-/// >>>>>>>> Functions to retrieve reference inners >>>>>>>>>>>>>>>>>>>>>>>>>>>>
+// >>>>>>>> Functions to retrieve reference inners >>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 inline constexpr bool isNullRef(const ValVariant &Val) {
   return Val.get<UnknownRef>().Value == 0;
@@ -277,6 +299,6 @@ template <typename T> inline T &retrieveExternRef(const ExternRef &Val) {
   return *reinterpret_cast<T *>(Val.Ptr);
 }
 
-/// <<<<<<<< Functions to retrieve reference inners <<<<<<<<<<<<<<<<<<<<<<<<<<<<
+// <<<<<<<< Functions to retrieve reference inners <<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 } // namespace WasmEdge

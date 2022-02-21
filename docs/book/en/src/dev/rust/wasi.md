@@ -1,15 +1,14 @@
 # Access OS services
 
-The WASI (WebAssembly Systems Interface) standard is designed to allow
-WebAssembly applications to access operating system services.
-The `wasm32-wasi` target in the Rust compiler supports WASI. In this section,
-we will use [an example project](https://github.com/second-state/wasm-learning/tree/master/cli/wasi) to show how to use Rust standard APIs to access operating system services.
+The WASI (WebAssembly Systems Interface) standard is designed to allow WebAssembly applications to access operating system services.
+The `wasm32-wasi` target in the Rust compiler supports WASI.
+In this section, we will use [an example project](https://github.com/second-state/wasm-learning/tree/master/cli/wasi) to show how to use Rust standard APIs to access operating system services.
 
 ## Random numbers
 
 The WebAssembly VM is a pure software construct. It does not have a hardware entropy source for random numbers. That's why WASI defines a function for WebAssembly programs to call its host operating system to get a random seed. As a Rust developer, all you need is to use the popular (de facto standard) `rand` and/or `getrandom` crates. With the `wasm32-wasi` compiler backend, these crates generate the correct WASI calls in the WebAssembly bytecode. The `Cargo.toml` dependencies are as follows.
 
-```
+```toml
 [dependencies]
 rand = "0.7.3"
 getrandom = "0.1.14"
@@ -35,7 +34,7 @@ pub fn get_random_bytes() -> Vec<u8> {
 
 ## Printing and debugging from Rust
 
-The Rust `println!` marco just works in WASI. The statements print to the `STDOUT` of the process that runs the WasmEdge. 
+The Rust `println!` marco just works in WASI. The statements print to the `STDOUT` of the process that runs the WasmEdge.
 
 ```rust
 pub fn echo(content: &str) -> String {
@@ -67,7 +66,7 @@ pub fn print_env() {
 
 ## Reading and writing files
 
-WASI allows your Rust functions to access the host computer's file system through the standard Rust `std::fs` API. 
+WASI allows your Rust functions to access the host computer's file system through the standard Rust `std::fs` API.
 In the Rust program, you operate on files through a relative path. The relative
 path's root is specified when you start the WasmEdge runtime.
 
@@ -97,7 +96,7 @@ pub fn del_file(path: &str) {
 
 ## A main() app
 
-With a `main()` function, the Rust program can be compiled into a 
+With a `main()` function, the Rust program can be compiled into a
 standalone WebAssembly program.
 
 ```rust
@@ -115,7 +114,7 @@ fn main() {
 Use the command below to compile [the Rust project](https://github.com/second-state/wasm-learning/tree/master/cli/wasi).
 
 ```bash
-$ cargo build --target wasm32-wasi
+cargo build --target wasm32-wasi
 ```
 
 To run it in `wasmedge`, do the following. The `--dir` option maps the current
@@ -144,7 +143,7 @@ will need to explicitly call a helper function to initialize
 environment for WASI functions to work properly.
 In the Rust program, add a helper crate in Cargo.toml so that the WASI initialization code can be applied to your exported public library functions.
 
-```
+```toml
 [dependencies]
 ... ...
 wasmedge-wasi-helper = "=0.2.0"
@@ -173,5 +172,3 @@ pub fn del_file(path: &str) -> String {
   ... ...
 }
 ```
-
-

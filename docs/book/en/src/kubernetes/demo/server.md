@@ -2,14 +2,11 @@
 
 Let's build a container image for a WebAssembly HTTP service.
 The HTTP service application is developed in Rust using the [WasmEdge networking socket API](https://github.com/second-state/wasmedge_wasi_socket).
-Kubernetes could manage the wasm application lifecycle
-with CRI-O, Docker and Containerd.
+Kubernetes could manage the wasm application lifecycle with CRI-O, Docker and Containerd.
 
 ## Prerequisites
 
-This is a Rust example, which require you to install [Rust](https://www.rust-lang.org/tools/install)
-and [WasmEdge](https://github.com/WasmEdge/WasmEdge/blob/master/docs/install.md)
-before you can Compile and Run the http service.
+This is a Rust example, which require you to install [Rust](https://www.rust-lang.org/tools/install) and [WasmEdge](../../start/install.md) before you can Compile and Run the http service.
 
 ## Download example code
 
@@ -41,11 +38,10 @@ chmod +x ./target/wasm32-wasi/release/http_server.wasm
 
 ## Running the http_server application bytecode with wasmedge
 
-When you run the bytecode with wasmedge and see the result as the following, you
-are ready to package the bytecode into the container.
+When you run the bytecode with wasmedge and see the result as the following, you are ready to package the bytecode into the container.
 
 ```bash
-wasmedge ./target/wasm32-wasi/release/http_server.wasm
+$ wasmedge ./target/wasm32-wasi/release/http_server.wasm
 new connection at 1234
 ```
 
@@ -60,7 +56,7 @@ echo: name=WasmEdge
 
 Create a file called `Dockerfile` in the `target/wasm32-wasi/release/` folder with the following content:
 
-```
+```dockerfile
 FROM scratch
 ADD http_server.wasm /
 CMD ["/http_server.wasm"]

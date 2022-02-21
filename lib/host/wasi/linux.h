@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #include "common/defines.h"
 #if !WASMEDGE_OS_LINUX
 #error
@@ -12,8 +14,12 @@
 #include "wasi/api.hpp"
 #include <cerrno>
 #include <chrono>
+#include <csignal>
+#include <cstdio>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
+#include <sched.h>
 #include <sys/epoll.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
@@ -33,7 +39,11 @@
 #if defined(__GLIBC_PREREQ)
 #define _LIBCPP_GLIBC_PREREQ(a, b) 0
 #else
+#if defined(_LIBCPP_GLIBC_PREREQ)
 #define __GLIBC_PREREQ(a, b) _LIBCPP_GLIBC_PREREQ(a, b)
+#else
+#define __GLIBC_PREREQ(a, b) 1
+#endif
 #endif
 
 #if __GLIBC_PREREQ(2, 8)
@@ -200,7 +210,7 @@ inline constexpr __wasi_errno_t fromErrNo(int ErrNo) noexcept {
   case EXDEV:
     return __WASI_ERRNO_XDEV;
   default:
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 
@@ -229,7 +239,7 @@ inline constexpr __wasi_errno_t fromEAIErrNo(int ErrNo) noexcept {
   case EAI_SYSTEM:
     return __WASI_ERRNO_AISYSTEM;
   default:
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 
@@ -244,7 +254,7 @@ inline constexpr clockid_t toClockId(__wasi_clockid_t Clock) noexcept {
   case __WASI_CLOCKID_THREAD_CPUTIME_ID:
     return CLOCK_THREAD_CPUTIME_ID;
   default:
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 
@@ -302,7 +312,7 @@ inline constexpr int toAdvice(__wasi_advice_t Advice) noexcept {
   case __WASI_ADVICE_NOREUSE:
     return POSIX_FADV_NOREUSE;
   default:
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 
@@ -356,7 +366,52 @@ inline constexpr int toWhence(__wasi_whence_t Whence) noexcept {
   case __WASI_WHENCE_SET:
     return SEEK_SET;
   default:
-    __builtin_unreachable();
+    assumingUnreachable();
+  }
+}
+
+inline constexpr int toSockOptLevel(__wasi_sock_opt_level_t Level) noexcept {
+  switch (Level) {
+  case __WASI_SOCK_OPT_LEVEL_SOL_SOCKET:
+    return SOL_SOCKET;
+  default:
+    assumingUnreachable();
+  }
+}
+
+inline constexpr int toSockOptSoName(__wasi_sock_opt_so_t SoName) noexcept {
+  switch (SoName) {
+  case __WASI_SOCK_OPT_SO_REUSEADDR:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_TYPE:
+    return SO_TYPE;
+  case __WASI_SOCK_OPT_SO_ERROR:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_DONTROUTE:
+    return SO_TYPE;
+  case __WASI_SOCK_OPT_SO_BROADCAST:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_SNDBUF:
+    return SO_TYPE;
+  case __WASI_SOCK_OPT_SO_RCVBUF:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_KEEPALIVE:
+    return SO_TYPE;
+  case __WASI_SOCK_OPT_SO_OOBINLINE:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_LINGER:
+    return SO_TYPE;
+  case __WASI_SOCK_OPT_SO_RCVLOWAT:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_RCVTIMEO:
+    return SO_TYPE;
+  case __WASI_SOCK_OPT_SO_SNDTIMEO:
+    return SO_REUSEADDR;
+  case __WASI_SOCK_OPT_SO_ACCEPTCONN:
+    return SO_TYPE;
+
+  default:
+    assumingUnreachable();
   }
 }
 

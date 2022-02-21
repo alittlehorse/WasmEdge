@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 cmake_minimum_required(VERSION 3.9.4)
 cmake_policy(SET CMP0091 NEW)
@@ -67,6 +68,7 @@ set(WASMEDGE_BUILD_PACKAGE "DEB;RPM" CACHE STRING "Package generate types")
 set(CPACK_PROJECT_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cpack_config.cmake)
 
 if(WASMEDGE_BUILD_COVERAGE)
+  set(GCOVR_ADDITIONAL_ARGS "--exclude-unreachable-branches;--exclude-throw-branches")
   include(CodeCoverage)
   append_coverage_compiler_flags()
 endif()

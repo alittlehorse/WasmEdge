@@ -3,7 +3,7 @@
 [Host functions](https://webassembly.github.io/spec/core/exec/runtime.html#syntax-hostfunc) are functions outside WebAssembly and passed to WASM modules as imports. The following steps give an example of registering a `host module` into WasmEdge runtime.
 
 This example is for the sources compile with the WasmEdge project in C++.
-If developers want to implement the host functions in C/C++ with WasmEdge C API and without compiling with the WasmEdge project, please refer to the [C API Documentation](c_api.md#host-functions).
+If developers want to implement the host functions in C/C++ with WasmEdge C API and without compiling with the WasmEdge project, please refer to the [C API Documentation](../../embed/c/ref.md#host-functions).
 
 ## Definitions of Host Instances
 
@@ -58,7 +58,7 @@ class TestHost1 : public TestCluster<TestHost1> {
 public:
   TestHost1(std::vector<uint8_t> &Vec) : TestCluster(Vec) {}
   Expect<uint32_t> body(Runtime::Instance::MemoryInstance *MemInst, uint32_t Param1, float Param2) {
-    /// Operations to `Data` ...
+    // Operations to `Data` ...
     return {};
   }
 };
@@ -67,7 +67,7 @@ class TestHost2 : public TestCluster<TestHost2> {
 public:
   TestHost2(std::vector<uint8_t> &Vec) : TestCluster(Vec) {}
   Expect<uint64_t> body(Runtime::Instance::MemoryInstance *MemInst, uint64_t Param1, double Param2) {
-    /// Operations to `Data` ...
+    // Operations to `Data` ...
     return {};
   }
 };
@@ -132,7 +132,7 @@ class TestHost1 : public TestCluster<TestHost1> {
 public:
   TestHost1(std::vector<uint8_t> &Vec) : TestCluster(Vec) {}
   Expect<uint32_t> body(Runtime::Instance::MemoryInstance *MemInst, uint32_t Param1, float Param2) {
-    /// Operations to `Data` ...
+    // Operations to `Data` ...
     return {};
   }
 };
@@ -141,7 +141,7 @@ class TestHost2 : public TestCluster<TestHost2> {
 public:
   TestHost2(std::vector<uint8_t> &Vec) : TestCluster(Vec) {}
   Expect<uint64_t> body(Runtime::Instance::MemoryInstance *MemInst, uint64_t Param1, double Param2) {
-    /// Operations to `Data` ...
+    // Operations to `Data` ...
     return {};
   }
 };
@@ -149,19 +149,19 @@ public:
 class TestModule : public Runtime::ImportObject {
 public:
   TestModule(std::vector<uint8_t> &Vec) : ImportObject("test"), Data(Vec) {
-    /// Add function instances with exporting name
+    // Add function instances with exporting name
     addHostFunc("test_func1", std::make_unique<TestHost1>(Data));
     addHostFunc("test_func2", std::make_unique<TestHost2>(Data));
 
-    /// Add table instance with exporting name
+    // Add table instance with exporting name
     addHostTable("table", std::make_unique<Runtime::Instance::TableInstance>(
                               TableType(RefType::FuncRef, 10, 20)));
 
-    /// Add memory instance with exporting name
+    // Add memory instance with exporting name
     addHostMemory("memory", std::make_unique<Runtime::Instance::MemoryInstance>(
                                 MemoryType(1, 2)));
 
-    /// Add global instance with exporting name
+    // Add global instance with exporting name
     addHostGlobal("global_i32",
                   std::make_unique<Runtime::Instance::GlobalInstance>(
                       GlobalType(ValType::I32, ValMut::Const), uint32_t(666)));
@@ -207,7 +207,7 @@ VM.registerModule(TestMod);
 
 For finding headers from WasmEdge include directories and linking static libraries, some settings are necessary for CMakeFile:
 
-```
+```cmake
 add_library(wasmedgeHostModuleTest  # Static library name of host modules
   test.cpp  # Path to host modules cpp files
 )

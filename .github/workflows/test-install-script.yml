@@ -26,10 +26,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: CentOS 8
+          - name: CentOS 8 Stream
             host_runner: ubuntu-latest
             package_manager: yum
-            docker_image: centos:8.4.2105
+            docker_image: quay.io/centos/centos:stream8
           - name: CentOS 7
             host_runner: ubuntu-latest
             package_manager: yum
@@ -85,6 +85,11 @@ jobs:
     - name: Install WasmEdge specific release (0.8.2) with all extensions
       run: |
         bash utils/install.sh -e all -v 0.8.2 -V
+    - name: Install WasmEdge and test for arm extension installation
+      run: |
+        bash utils/install.sh -e all --version=0.9.1-beta.1 \
+        --tf-version=0.9.1-beta.1 --tf-deps-version=0.9.1-beta.1  --tf-tools-version=0.9.1-beta.1  \
+        --image-version=0.9.1-beta.1 --image-deps-version=0.9.1-beta.1
     - name: Uninstall WasmEdge with all extensions
       run: |
         bash utils/uninstall.sh -q -V
@@ -124,6 +129,12 @@ jobs:
     - name: Uninstall WasmEdge with Image extensions
       run: |
         bash utils/uninstall.sh -q -V
+    - name: Uninstall WasmEdge and Source Line removal check
+      run: |
+        bash utils/install.sh && bash utils/uninstall.sh -q
+        grep -qE *.wasmedge/env* ~/.bashrc && echo "Failed: Source Lines found" || echo "Pass: Source Lines Removed"
+        grep -qE *.wasmedge/env* ~/.bash_profile && echo "Failed: Source Lines found" || echo "Pass: Source Lines Removed"
+        grep -qE *.wasmedge/env* ~/.profile && echo "Failed: Source Lines found" || echo "Pass: Source Lines Removed"
 
   macos:
     strategy:

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/loader/shared_library.h - Shared library definition ------===//
 //
 // Part of the WasmEdge Project.
@@ -18,7 +20,9 @@
 #include "common/filesystem.h"
 #include "common/symbol.h"
 
+#include <cstdint>
 #include <memory>
+#include <vector>
 
 #if WASMEDGE_OS_WINDOWS
 #include <boost/winapi/dll.hpp>

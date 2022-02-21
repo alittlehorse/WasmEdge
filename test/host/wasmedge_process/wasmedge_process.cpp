@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "host/wasmedge_process/processfunc.h"
 #include "host/wasmedge_process/processmodule.h"
-#include "gtest/gtest.h"
 
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <gtest/gtest.h>
 #include <string>
 #include <vector>
-
-using namespace std::literals;
 
 namespace {
 void fillMemContent(WasmEdge::Runtime::Instance::MemoryInstance &MemInst,

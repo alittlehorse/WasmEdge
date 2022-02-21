@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "system/allocator.h"
 
 #include "common/config.h"
 #include "common/defines.h"
 #include "common/errcode.h"
-
-#include <cassert>
-#include <cctype>
-#include <cstdlib>
-#include <fstream>
-#include <limits>
-#include <mutex>
-#include <set>
-#include <string>
-#include <utility>
 
 #if defined(HAVE_MMAP) && defined(__x86_64__) || defined(__aarch64__) ||       \
     defined(__arm__)
@@ -51,6 +42,10 @@ BOOST_CONSTEXPR_OR_CONST DWORD_ MEM_RELEASE_ = 0x00008000;
 #endif
 } // namespace winapi
 } // namespace boost
+#else
+#include <cctype>
+#include <cstdlib>
+#include <cstring>
 #endif
 
 namespace WasmEdge {

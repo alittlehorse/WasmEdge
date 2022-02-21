@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "common/errinfo.h"
 
-#include "gtest/gtest.h"
-
+#include <cstdint>
+#include <gtest/gtest.h>
 #include <iostream>
 #include <vector>
 

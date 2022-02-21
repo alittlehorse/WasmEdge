@@ -1,26 +1,29 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "executor/executor.h"
 
-#include <memory>
-#include <vector>
+#include <cstdint>
 
 namespace WasmEdge {
 namespace Executor {
 
-Expect<void> Executor::runLocalGetOp(const uint32_t Idx) {
+Expect<void> Executor::runLocalGetOp(Runtime::StackManager &StackMgr,
+                                     const uint32_t Idx) {
   const uint32_t Offset = StackMgr.getOffset(Idx);
   StackMgr.push(StackMgr.getBottomN(Offset));
   return {};
 }
 
-Expect<void> Executor::runLocalSetOp(const uint32_t Idx) {
+Expect<void> Executor::runLocalSetOp(Runtime::StackManager &StackMgr,
+                                     const uint32_t Idx) {
   const uint32_t Offset = StackMgr.getOffset(Idx);
   StackMgr.getBottomN(Offset) = StackMgr.pop();
   return {};
 }
 
-Expect<void> Executor::runLocalTeeOp(const uint32_t Idx) {
+Expect<void> Executor::runLocalTeeOp(Runtime::StackManager &StackMgr,
+                                     const uint32_t Idx) {
   const ValVariant &Val = StackMgr.getTop();
   const uint32_t Offset = StackMgr.getOffset(Idx);
   StackMgr.getBottomN(Offset) = Val;
@@ -28,15 +31,19 @@ Expect<void> Executor::runLocalTeeOp(const uint32_t Idx) {
 }
 
 Expect<void> Executor::runGlobalGetOp(Runtime::StoreManager &StoreMgr,
+                                      Runtime::StackManager &StackMgr,
                                       const uint32_t Idx) {
-  auto *GlobInst = getGlobInstByIdx(StoreMgr, Idx);
+  auto *GlobInst = getGlobInstByIdx(StoreMgr, StackMgr, Idx);
+  assuming(GlobInst);
   StackMgr.push(GlobInst->getValue());
   return {};
 }
 
 Expect<void> Executor::runGlobalSetOp(Runtime::StoreManager &StoreMgr,
+                                      Runtime::StackManager &StackMgr,
                                       const uint32_t Idx) {
-  auto *GlobInst = getGlobInstByIdx(StoreMgr, Idx);
+  auto *GlobInst = getGlobInstByIdx(StoreMgr, StackMgr, Idx);
+  assuming(GlobInst);
   GlobInst->getValue() = StackMgr.pop();
   return {};
 }

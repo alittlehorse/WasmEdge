@@ -1,11 +1,9 @@
 # Node.js SDK
 
-
 In this tutorial, I will show you how to incorporate WebAssembly functions, written in Rust, into Node.js applications on the server via the WasmEdge Node.js SDK. This approach combines Rust's **performance**, WebAssembly's **security and portability**, and JavaScript's **ease-of-use**. A typical application works like this.
 
 * The host application is a Node.js web application written in JavaScript. It makes WebAssembly function calls.
 * The WebAssembly bytecode program is written in Rust. It runs inside the WasmEdge Runtime, and is called from the Node.js web application.
-
 
 > [Fork this Github repository](https://github.com/second-state/wasmedge-nodejs-starter/fork) to start coding!
 
@@ -16,22 +14,24 @@ To set up a high-performance Node.js environment with Rust and WebAssembly, you 
 * A modern Linux distribution, such as Ubuntu Server 20.04 LTS
 * [Rust language](https://www.rust-lang.org/tools/install)
 * [Node.js](https://nodejs.org/en/download/package-manager/)
-* [The WasmEdge Runtime](https://github.com/WasmEdge/WasmEdge/blob/master/docs/install.md) for Node.js
+* [The WasmEdge Runtime](../start/install.md#install-wasmedge-for-node.js) for Node.js
 * [The rustwasmc compiler toolchain](/articles/rustwasmc)
 
 ### Docker
 
 The easiest way to get started is to use Docker to build a dev environment. Just [clone this template project](https://github.com/second-state/wasmedge-nodejs-starter/) to your computer and run the following Docker commands.
 
-```src
+```bash
 # Get the code
-$ git clone https://github.com/second-state/wasmedge-nodejs-starter
-$ cd wasmedge-nodejs-starter
+git clone https://github.com/second-state/wasmedge-nodejs-starter
+cd wasmedge-nodejs-starter
 
 # Run Docker container
-$ docker pull wasmedge/appdev_x86_64:0.8.2
-$ docker run -p 3000:3000 --rm -it -v $(pwd):/app wasmedge/appdev_x86_64:0.8.2
-(docker) $ cd /app
+docker pull wasmedge/appdev_x86_64:0.8.2
+docker run -p 3000:3000 --rm -it -v $(pwd):/app wasmedge/appdev_x86_64:0.8.2
+
+# In docker
+cd /app
 ```
 
 That's it! You are now ready to compile and run the code.
@@ -40,36 +40,36 @@ That's it! You are now ready to compile and run the code.
 
 The commands are as follows.
 
-```src
+```bash
 # Install Rust
-$ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-$ source $HOME/.cargo/env
-$ rustup override set 1.50.0
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source $HOME/.cargo/env
+rustup override set 1.50.0
 
 # Install Node.js and npm
-$ curl -sL https://deb.nodesource.com/setup_14.x |  bash
-$ sudo apt-get install -y nodejs npm
+curl -sL https://deb.nodesource.com/setup_14.x |  bash
+sudo apt-get install -y nodejs npm
 
 # Install rustwasmc toolchain
-$ npm install -g rustwasmc # Append --unsafe-perm if permission denied
+npm install -g rustwasmc # Append --unsafe-perm if permission denied
 
 # OS dependencies for WasmEdge
-$ sudo apt-get update
-$ sudo apt-get -y upgrade
-$ sudo apt install -y build-essential curl wget git vim libboost-all-dev llvm-dev liblld-10-dev
+sudo apt-get update
+sudo apt-get -y upgrade
+sudo apt install -y build-essential curl wget git vim libboost-all-dev llvm-dev liblld-10-dev
 
 # Install the nodejs addon for WasmEdge
-$ npm install wasmedge-core
-$ npm install wasmedge-extensions
+npm install wasmedge-core
+npm install wasmedge-extensions
 ```
 
 > The WasmEdge Runtime depends on the latest version of `libstdc++`. Ubuntu 20.04 LTS already has the latest libraries. If you are running an older Linux distribution, you have [several options to upgrade](/articles/ubuntu-req-ssvm-20200715/).
 
 Next, clone the example source code repository.
 
-```src
-$ git clone https://github.com/second-state/wasmedge-nodejs-starter
-$ cd wasmedge-nodejs-starter
+```bash
+git clone https://github.com/second-state/wasmedge-nodejs-starter
+cd wasmedge-nodejs-starter
 ```
 
 ## Hello World
@@ -89,10 +89,11 @@ pub fn say(s: String) -> String {
   return r + &s;
 }
 ```
+
 Next, you can compile the Rust source code into WebAssembly bytecode and generate the accompanying JavaScript module for the Node.js host environment.
 
-```src
-$ rustwasmc build
+```bash
+rustwasmc build
 ```
 
 The result are files in the `pkg/` directory. the `.wasm` file is the WebAssembly bytecode program, and the `.js` files are for the JavaScript module.
@@ -123,14 +124,14 @@ server.listen(port, hostname, () => {
 
 Start the Node.js application server as follows.
 
-```src
+```bash
 $ node node/app.js
 Server running at http://127.0.0.1:3000/
 ```
 
 Then, you can test it from another terminal window.
 
-```src
+```bash
 $ curl http://127.0.0.1:3000/?name=Wasm
 hello Wasm
 ```
@@ -147,18 +148,18 @@ a*X^2 + b*X + c = 0
 
 The roots for `X` are displayed in the area below the input form.
 
-![](/articles/getting-started-with-rust-function-01.png)
+![getting-started-with-rust-function](https://www.secondstate.io/articles/getting-started-with-rust-function-01.png)
 
-The [HTML file](https://github.com/second-state/wasm-learning/blob/master/nodejs/quadratic/node/public/index.html) contains the client side JavaScript to submit the web form to `/solve`, and put result into the `#roots` HTML element on the page. 
+The [HTML file](https://github.com/second-state/wasm-learning/blob/master/nodejs/quadratic/node/public/index.html) contains the client side JavaScript to submit the web form to `/solve`, and put result into the `#roots` HTML element on the page.
 
 ```javascript
 $(function() {
-    var options = {
-      target: '#roots',
-      url: "/solve",
-      type: "post"
-    };
-    $('#solve').ajaxForm(options);
+  var options = {
+    target: '#roots',
+    url: "/solve",
+    type: "post"
+  };
+  $('#solve').ajaxForm(options);
 });
 ```
 
@@ -193,11 +194,11 @@ pub fn solve(params: &str) -> String {
 
 Let's try it.
 
-```src
-$ rustwasmc build
-$ npm install express # The application requires the Express framework in Node.js
+```bash
+rustwasmc build
+npm install express # The application requires the Express framework in Node.js
 
-$ node node/server.js
+node node/server.js
 ```
 
 From the web browser, go to `http://ip-addr:8080/` to access this application. Note: If you are using Docker, make sure that the Docker container port 8080 is mapped to the host port 8080.
@@ -210,7 +211,7 @@ Besides passing string values between Rust and JavaScript, the `rustwasmc` tool 
 
 * Rust call parameters can be any combo of `i32`, `String`, `&str`, `Vec<u8>`, and `&[u8]`
 * Return value can be `i32` or `String` or `Vec<u8>` or void
-* For complex data types, such as structs, you could use JSON strings to pass data. 
+* For complex data types, such as structs, you could use JSON strings to pass data.
 
 > With JSON support, you can call Rust functions with any number of input parameters and return any number of return values of any type.
 
@@ -306,7 +307,7 @@ console.log( line );
 
 After running `rustwasmc` to build the Rust library, running `app.js` in Node.js environment produces the following output.
 
-```src
+```bash
 $ rustwasmc build
 ... Building the wasm file and JS shim file in pkg/ ...
 
@@ -325,7 +326,3 @@ N dhvpx oebja sbk whzcf bire gur ynml qbt
   length: 2.2360682,
   desc: 'A thin red line' }  
 ```
-
-
-
-

@@ -1,13 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #pragma once
 
 #include "common/defines.h"
 #include "common/span.h"
 #include "host/wasi/error.h"
 #include <functional>
+#include <limits>
 #include <optional>
 #include <string_view>
 #include <vector>
+
+#if WASMEDGE_OS_LINUX
+#include <unordered_map>
+#endif
 
 #if WASMEDGE_OS_LINUX || WASMEDGE_OS_MACOS
 #include <dirent.h>
@@ -24,7 +31,11 @@
 #if defined(__GLIBC_PREREQ)
 #define _LIBCPP_GLIBC_PREREQ(a, b) 0
 #else
+#if defined(_LIBCPP_GLIBC_PREREQ)
 #define __GLIBC_PREREQ(a, b) _LIBCPP_GLIBC_PREREQ(a, b)
+#else
+#define __GLIBC_PREREQ(a, b) 1
+#endif
 #endif
 #endif
 
@@ -481,7 +492,7 @@ public:
   static WasiExpect<Poller> pollOneoff(__wasi_size_t NSubscriptions) noexcept;
 
   static WasiExpect<void>
-  getAddrinfo(const char *NodeStr, const char *ServiceStr,
+  getAddrinfo(std::string_view NodeStr, std::string_view ServiceStr,
               const __wasi_addrinfo_t &Hint, uint32_t MaxResLength,
               Span<__wasi_addrinfo_t *> WasiAddrinfoArray,
               Span<__wasi_sockaddr_t *> WasiSockaddrArray,
@@ -536,6 +547,20 @@ public:
   /// @param[in] SdFlags Which channels on the socket to shut down.
   /// @return Nothing or WASI error
   WasiExpect<void> sockShutdown(__wasi_sdflags_t SdFlags) const noexcept;
+
+  WasiExpect<void> sockGetOpt(__wasi_sock_opt_level_t SockOptLevel,
+                              __wasi_sock_opt_so_t SockOptName, void *FlagPtr,
+                              uint32_t *FlagSizePtr) const noexcept;
+
+  WasiExpect<void> sockSetOpt(__wasi_sock_opt_level_t SockOptLevel,
+                              __wasi_sock_opt_so_t SockOptName, void *FlagPtr,
+                              uint32_t FlagSizePtr) const noexcept;
+
+  WasiExpect<void> sockGetLoaclAddr(uint8_t *Address, uint32_t *AddrTypePtr,
+                                    uint32_t *PortPtr) const noexcept;
+
+  WasiExpect<void> sockGetPeerAddr(uint8_t *Address, uint32_t *AddrTypePtr,
+                                   uint32_t *PortPtr) const noexcept;
 
   /// File type.
   WasiExpect<__wasi_filetype_t> filetype() const noexcept;
@@ -623,7 +648,15 @@ private:
 #endif
   };
 
+  struct FdData {
+    uint32_t Events = 0;
+    uint32_t ReadIndex = std::numeric_limits<uint32_t>::max();
+    uint32_t WriteIndex = std::numeric_limits<uint32_t>::max();
+    constexpr FdData(uint32_t E) noexcept : Events(E) {}
+  };
+
   std::vector<Timer> Timers;
+  std::unordered_map<int, FdData> FdDatas;
 #endif
 };
 

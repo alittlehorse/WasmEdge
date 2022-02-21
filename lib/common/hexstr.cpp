@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "common/hexstr.h"
 
-#include <cinttypes>
+#include <algorithm>
 #include <spdlog/fmt/fmt.h>
 
 namespace WasmEdge {

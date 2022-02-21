@@ -7,8 +7,8 @@ For other Linux distributions, please [see here](https://github.com/containers/c
 ```bash
 sudo apt update
 sudo apt install -y make git gcc build-essential pkgconf libtool \
-   libsystemd-dev libprotobuf-c-dev libcap-dev libseccomp-dev libyajl-dev \
-   go-md2man libtool autoconf python3 automake
+    libsystemd-dev libprotobuf-c-dev libcap-dev libseccomp-dev libyajl-dev \
+    go-md2man libtool autoconf python3 automake
 ```
 
 Next, configure, build, and install a `crun` binary with WasmEdge support.
@@ -21,4 +21,3 @@ cd crun
 make
 sudo make install
 ```
-

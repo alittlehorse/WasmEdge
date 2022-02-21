@@ -1,9 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "loader/shared_library.h"
 
 #include "common/log.h"
 #include "system/allocator.h"
+
+#include <algorithm>
+#include <cerrno>
+#include <cstdint>
+#include <cstring>
+#include <tuple>
+#include <utility>
 
 #if WASMEDGE_OS_WINDOWS
 #include <boost/winapi/dll.hpp>
@@ -36,7 +44,7 @@ inline constexpr uint64_t roundUpPageBoundary(const uint64_t Value) {
 namespace WasmEdge {
 namespace Loader {
 
-/// Open so file. See "include/loader/shared_library.h".
+// Open so file. See "include/loader/shared_library.h".
 Expect<void> SharedLibrary::load(const std::filesystem::path &Path) noexcept {
 #if WASMEDGE_OS_WINDOWS
   Handle = winapi::load_library_ex(Path.c_str(), nullptr, 0);

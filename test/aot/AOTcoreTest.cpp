@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/test/aot/AOTcoreTest.cpp - Wasm test suites --------------===//
 //
 // Part of the WasmEdge Project.
@@ -19,11 +21,18 @@
 
 #include "../spec/hostfunc.h"
 #include "../spec/spectest.h"
-#include "gtest/gtest.h"
 
-#include <fstream>
+#include <array>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <gtest/gtest.h>
+#include <map>
 #include <memory>
 #include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #if WASMEDGE_OS_LINUX
@@ -40,7 +49,7 @@ using namespace std::literals;
 using namespace WasmEdge;
 static SpecTest T(std::filesystem::u8path("../spec/testSuites"sv));
 
-/// Parameterized testing class.
+// Parameterized testing class.
 class NativeCoreTest : public testing::TestWithParam<std::string> {};
 class CustomWasmCoreTest : public testing::TestWithParam<std::string> {};
 
@@ -105,25 +114,25 @@ TEST_P(NativeCoreTest, TestSuites) {
         .and_then([&VM]() { return VM.validate(); })
         .and_then([&VM]() { return VM.instantiate(); });
   };
-  /// Helper function to call functions.
+  // Helper function to call functions.
   T.onInvoke = [&VM](const std::string &ModName, const std::string &Field,
                      const std::vector<ValVariant> &Params,
                      const std::vector<ValType> &ParamTypes)
       -> Expect<std::vector<std::pair<ValVariant, ValType>>> {
     if (!ModName.empty()) {
-      /// Invoke function of named module. Named modules are registered in
-      /// Store Manager.
+      // Invoke function of named module. Named modules are registered in Store
+      // Manager.
       return VM.execute(ModName, Field, Params, ParamTypes);
     } else {
-      /// Invoke function of anonymous module. Anonymous modules are
-      /// instantiated in VM.
+      // Invoke function of anonymous module. Anonymous modules are instantiated
+      // in VM.
       return VM.execute(Field, Params, ParamTypes);
     }
   };
-  /// Helper function to get values.
+  // Helper function to get values.
   T.onGet = [&VM](const std::string &ModName, const std::string &Field)
       -> Expect<std::pair<ValVariant, ValType>> {
-    /// Get module instance.
+    // Get module instance.
     auto &Store = VM.getStoreManager();
     WasmEdge::Runtime::Instance::ModuleInstance *ModInst = nullptr;
     if (ModName.empty()) {
@@ -136,16 +145,16 @@ TEST_P(NativeCoreTest, TestSuites) {
       }
     }
 
-    /// Get global instance.
-    auto &Globs = ModInst->getGlobalExports();
-    if (Globs.find(Field) == Globs.cend()) {
+    // Get global instance.
+    if (auto Res = ModInst->findGlobalExports(Field); unlikely(!Res)) {
       return Unexpect(ErrCode::IncompatibleImportType);
-    }
-    uint32_t GlobAddr = Globs.find(Field)->second;
-    auto *GlobInst = *Store.getGlobal(GlobAddr);
+    } else {
+      uint32_t GlobAddr = *Res;
+      auto *GlobInst = *Store.getGlobal(GlobAddr);
 
-    return std::make_pair(GlobInst->getValue(),
-                          GlobInst->getGlobalType().getValType());
+      return std::make_pair(GlobInst->getValue(),
+                            GlobInst->getGlobalType().getValType());
+    }
   };
 
   T.run(Proposal, UnitName);
@@ -210,25 +219,25 @@ TEST_P(CustomWasmCoreTest, TestSuites) {
         .and_then([&VM]() { return VM.validate(); })
         .and_then([&VM]() { return VM.instantiate(); });
   };
-  /// Helper function to call functions.
+  // Helper function to call functions.
   T.onInvoke = [&VM](const std::string &ModName, const std::string &Field,
                      const std::vector<ValVariant> &Params,
                      const std::vector<ValType> &ParamTypes)
       -> Expect<std::vector<std::pair<ValVariant, ValType>>> {
     if (!ModName.empty()) {
-      /// Invoke function of named module. Named modules are registered in
-      /// Store Manager.
+      // Invoke function of named module. Named modules are registered in Store
+      // Manager.
       return VM.execute(ModName, Field, Params, ParamTypes);
     } else {
-      /// Invoke function of anonymous module. Anonymous modules are
-      /// instantiated in VM.
+      // Invoke function of anonymous module. Anonymous modules are instantiated
+      // in VM.
       return VM.execute(Field, Params, ParamTypes);
     }
   };
-  /// Helper function to get values.
+  // Helper function to get values.
   T.onGet = [&VM](const std::string &ModName, const std::string &Field)
       -> Expect<std::pair<ValVariant, ValType>> {
-    /// Get module instance.
+    // Get module instance.
     auto &Store = VM.getStoreManager();
     WasmEdge::Runtime::Instance::ModuleInstance *ModInst = nullptr;
     if (ModName.empty()) {
@@ -241,22 +250,22 @@ TEST_P(CustomWasmCoreTest, TestSuites) {
       }
     }
 
-    /// Get global instance.
-    auto &Globs = ModInst->getGlobalExports();
-    if (Globs.find(Field) == Globs.cend()) {
+    // Get global instance.
+    if (auto Res = ModInst->findGlobalExports(Field); unlikely(!Res)) {
       return Unexpect(ErrCode::IncompatibleImportType);
-    }
-    uint32_t GlobAddr = Globs.find(Field)->second;
-    auto *GlobInst = *Store.getGlobal(GlobAddr);
+    } else {
+      uint32_t GlobAddr = *Res;
+      auto *GlobInst = *Store.getGlobal(GlobAddr);
 
-    return std::make_pair(GlobInst->getValue(),
-                          GlobInst->getGlobalType().getValType());
+      return std::make_pair(GlobInst->getValue(),
+                            GlobInst->getGlobalType().getValType());
+    }
   };
 
   T.run(Proposal, UnitName);
 }
 
-/// Initiate test suite.
+// Initiate test suite.
 INSTANTIATE_TEST_SUITE_P(TestUnit, NativeCoreTest,
                          testing::ValuesIn(T.enumerate()));
 INSTANTIATE_TEST_SUITE_P(TestUnit, CustomWasmCoreTest,

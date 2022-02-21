@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/test/spec/spectest.h - Wasm test suites ------------------===//
 //
 // Part of the WasmEdge Project.
@@ -20,7 +22,10 @@
 #include "common/types.h"
 
 #include <functional>
+#include <string>
 #include <string_view>
+#include <tuple>
+#include <utility>
 #include <vector>
 
 namespace WasmEdge {
@@ -52,8 +57,7 @@ public:
   bool
   compares(const std::vector<std::pair<std::string, std::string>> &Expected,
            const std::vector<std::pair<ValVariant, ValType>> &Got) const;
-  bool stringContains(const std::string &Expected,
-                      const std::string &Got) const;
+  bool stringContains(std::string_view Expected, std::string_view Got) const;
 
   void run(std::string_view Proposal, std::string_view UnitName);
 

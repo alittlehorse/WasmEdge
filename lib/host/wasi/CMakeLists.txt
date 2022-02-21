@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 if(APPLE)
   set(MACOS_MM macos.mm)
@@ -37,7 +38,7 @@ target_link_libraries(wasmedgeHostModuleWasi
   wasmedgeSystem
 )
 
-if(NOT APPLE AND NOT WIN32)
+if(NOT APPLE AND NOT WIN32 AND NOT ANDROID)
   target_link_libraries(wasmedgeHostModuleWasi
     PUBLIC
     rt

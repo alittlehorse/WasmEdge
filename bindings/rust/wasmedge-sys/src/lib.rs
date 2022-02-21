@@ -19,6 +19,7 @@ pub mod wasmedge {
     include!(concat!(env!("OUT_DIR"), "/wasmedge.rs"));
 }
 #[doc(hidden)]
+#[cfg(feature = "aot")]
 pub mod compiler;
 #[doc(hidden)]
 pub mod config;
@@ -33,60 +34,54 @@ pub mod instance;
 pub mod io;
 #[doc(hidden)]
 pub mod loader;
-#[doc(hidden)]
 pub mod module;
 #[doc(hidden)]
 pub mod statistics;
 #[doc(hidden)]
 pub mod store;
-#[doc(hidden)]
-pub mod string;
-#[doc(hidden)]
 pub mod types;
-#[doc(hidden)]
 pub mod utils;
 #[doc(hidden)]
 pub mod validator;
 #[doc(hidden)]
-pub mod version;
-#[doc(hidden)]
 pub mod vm;
 
 #[doc(inline)]
+#[cfg(feature = "aot")]
 pub use compiler::Compiler;
 #[doc(inline)]
 pub use config::Config;
 #[doc(inline)]
-pub use error::{Error, WasmEdgeError, WasmEdgeResult};
+pub use error::{
+    ExportError, FuncError, GlobalError, ImportError, StoreError, TableError, VmError,
+    WasmEdgeError, WasmEdgeResult,
+};
 #[doc(inline)]
 pub use executor::Executor;
 #[doc(inline)]
-pub use import_obj::ImportObj;
+pub use import_obj::ImportObject;
 #[doc(inline)]
 pub use instance::{
     function::{FuncType, Function},
     global::{Global, GlobalType},
+    memory::{MemType, Memory},
+    table::{Table, TableType},
 };
-#[doc(inline)]
-pub(crate) use io::WasmFnIO;
-#[doc(inline)]
-pub use io::{I1, I2};
 #[doc(inline)]
 pub use loader::Loader;
 #[doc(inline)]
-pub use module::Module;
+pub use module::{Export, Import, Module};
 #[doc(inline)]
 pub use statistics::Statistics;
 #[doc(inline)]
 pub use store::Store;
 #[doc(inline)]
-pub use string::{StringBuf, StringRef, WasmEdgeString};
-#[doc(inline)]
-pub use types::{Mutability, ValType, Value};
+pub use types::{
+    CompilerOptimizationLevel, CompilerOutputFormat, ExternalType, Mutability, RefType, ValType,
+    Value,
+};
 #[doc(inline)]
 pub use validator::Validator;
-#[doc(inline)]
-pub use version::{full_version, semv_version};
 #[doc(inline)]
 pub use vm::Vm;
 
@@ -95,7 +90,7 @@ thread_local! {
     #[allow(clippy::type_complexity)]
     static HOST_FUNCS:
       RefCell<
-        HashMap<usize, Box<dyn Fn(Vec<Value>) -> Result<Vec<Value>, u8>>>> = RefCell::new(HashMap::with_capacity(var("MAX_HOST_FUNC_LENGTH").map(|s| s.parse::<usize>().expect("MAX_HOST_FUNC_LENGTH should be a number")).unwrap_or(500)));
+        HashMap<usize, Box<dyn Fn(Vec<types::Value>) -> Result<Vec<types::Value>, u8>>>> = RefCell::new(HashMap::with_capacity(var("MAX_HOST_FUNC_LENGTH").map(|s| s.parse::<usize>().expect("MAX_HOST_FUNC_LENGTH should be a number")).unwrap_or(500)));
 }
 
 #[cfg(test)]
@@ -103,7 +98,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn links() {
+    fn test_versions() {
         unsafe {
             assert!(
                 wasmedge::WasmEdge_VersionGetMajor()

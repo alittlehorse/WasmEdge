@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #include "common/defines.h"
 #if WASMEDGE_OS_WINDOWS
 
@@ -97,7 +99,7 @@ WasiExpect<void> INode::fdRead(Span<Span<uint8_t>> IOVs,
     }
     NRead += NumberOfBytesRead;
   }
-  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+  return {};
 }
 
 WasiExpect<void> INode::fdReaddir(Span<uint8_t>, __wasi_dircookie_t,
@@ -128,7 +130,7 @@ WasiExpect<void> INode::fdWrite(Span<Span<const uint8_t>> IOVs,
     }
     NWritten += NumberOfBytesWritten;
   }
-  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+  return {};
 }
 
 WasiExpect<void> INode::pathCreateDirectory(std::string) const noexcept {
@@ -217,12 +219,34 @@ WasiExpect<void> INode::sockSend(Span<Span<const uint8_t>>, __wasi_siflags_t,
 WasiExpect<void> INode::sockShutdown(__wasi_sdflags_t) const noexcept {
   return WasiUnexpect(__WASI_ERRNO_NOSYS);
 }
-WasiExpect<void> INode::getAddrinfo(const char *, const char *,
+WasiExpect<void> INode::getAddrinfo(std::string_view, std::string_view,
                                     const __wasi_addrinfo_t &, uint32_t,
                                     Span<__wasi_addrinfo_t *>,
                                     Span<__wasi_sockaddr_t *>, Span<char *>,
                                     Span<char *>,
                                     /*Out*/ __wasi_size_t &) noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockGetOpt(__wasi_sock_opt_level_t,
+                                   __wasi_sock_opt_so_t, void *,
+                                   uint32_t *) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockSetOpt(__wasi_sock_opt_level_t,
+                                   __wasi_sock_opt_so_t, void *,
+                                   uint32_t) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockGetLoaclAddr(uint8_t *, uint32_t *,
+                                         uint32_t *) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockGetPeerAddr(uint8_t *, uint32_t *,
+                                        uint32_t *) const noexcept {
   return WasiUnexpect(__WASI_ERRNO_NOSYS);
 }
 

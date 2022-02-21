@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/common/errinfo.h - Error information definition ----------===//
 //
 // Part of the WasmEdge Project.
@@ -19,11 +21,11 @@
 #include "common/filesystem.h"
 #include "common/types.h"
 
-#include <iomanip>
-#include <iostream>
+#include <cstdint>
+#include <iosfwd>
+#include <limits>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <vector>
 
 namespace WasmEdge {

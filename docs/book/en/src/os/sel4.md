@@ -1,6 +1,5 @@
 # WasmEdge on seL4
 
-
 [Video demo](https://youtu.be/2Qu-Trtkspk) | [Build logs](https://github.com/second-state/wasmedge-seL4/runs/3982081148?check_suite_focus=true) | [Build artifact](https://github.com/second-state/wasmedge-seL4/actions/runs/1374510169)
 
 In this article, we demonstrate how to run WasmEdge on the seL4 RTOS, there are two parts:
@@ -10,7 +9,7 @@ In this article, we demonstrate how to run WasmEdge on the seL4 RTOS, there are 
 
 The figure below illustrates the architecture of the system.
 
-![](wasmedge-sel4.png)
+![wasmedge-sel4](wasmedge-sel4.png)
 
 This demo is based on the seL4 simulator on Linux.
 
@@ -19,8 +18,9 @@ This demo is based on the seL4 simulator on Linux.
 ### System requirements
 
 Hardware:
+
 - at least 4GB of RAM
-- at least 20GB of disk storage (the wasmedge_sel4 directory will contain over 11 GB of data after the following installation completes) 
+- at least 20GB of disk storage (the wasmedge_sel4 directory will contain over 11 GB of data after the following installation completes)
 
 Software: Ubuntu 20.04 with dev tools packages (ep. Python) installed. We recommend the [GitHub Actions Ubuntu 20.04 VM](https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-README.md) (See a list of [installed apt packages](https://github.com/actions/virtual-environments/blob/main/images/linux/Ubuntu2004-README.md#installed-apt-packages)). Or, you could use our Docker image (see the [Dockerfile](https://github.com/second-state/wasmedge-seL4/blob/main/docs/Dockerfile.sel4_build)).
 
@@ -42,7 +42,7 @@ wget -qO- https://raw.githubusercontent.com/second-state/wasmedge-seL4/main/buil
 
 And this will clone and build our wasmedge on seL4 to an image.
 
-After finishing the build script, you will have a folder `sel4_wasmedge`. 
+After finishing the build script, you will have a folder `sel4_wasmedge`.
 
 If this automatic installation completed successfully, skip over the manual installation information and proceed to [boot wasmedge-sel4](https://github.com/second-state/wasmedge-seL4#boot-wasmedge-sel4)
 
@@ -65,16 +65,19 @@ vi build.sh
 ```
 
 Add the following `-j` parameter to the last line of the file i.e.
+
 ```bash
 ninja -j 2
 ```
 
 Make the `build.sh` file executable.
+
 ```bash
 sudo chmod a+x build.sh
 ```
 
 Run the edited `build.sh file.
+
 ```bash
 ./build.sh
 ```
@@ -91,7 +94,7 @@ cd sel4_wasmedge/build
 Expected output:
 
 ```bash
-./simulate: qemu-system-aarch64 -machine virt,virtualization=on,highmem=off,secure=off -cpu cortex-a53 -nographic  -m size=2048  -kernel images/capdl-loader-image-arm-qemu-arm-virt
+$ ./simulate: qemu-system-aarch64 -machine virt,virtualization=on,highmem=off,secure=off -cpu cortex-a53 -nographic  -m size=2048  -kernel images/capdl-loader-image-arm-qemu-arm-virt
 ELF-loader started on CPU: ARM Ltd. Cortex-A53 r0p4
   paddr=[6abd8000..750cf0af]
 No DTB passed in from boot loader.

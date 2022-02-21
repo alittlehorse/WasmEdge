@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 set(WASMEDGE_INTERPROCEDURAL_OPTIMIZATION OFF)
 if(CMAKE_BUILD_TYPE STREQUAL Release OR CMAKE_BUILD_TYPE STREQUAL RelWithDebInfo)
@@ -37,6 +38,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     -Wno-error=nested-anon-types
     -Wno-error=old-style-cast
     -Wno-error=unused-command-line-argument
+    -Wno-ctad-maybe-unsupported
     -Wno-gnu-anonymous-struct
     -Wno-keyword-macro
     -Wno-language-extension-token

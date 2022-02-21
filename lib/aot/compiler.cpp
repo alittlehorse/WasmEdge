@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "aot/compiler.h"
 
@@ -7,16 +8,19 @@
 #include "common/filesystem.h"
 #include "common/log.h"
 
+#include <algorithm>
+#include <array>
 #include <charconv>
 #include <cinttypes>
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <lld/Common/Driver.h>
 #include <llvm/Analysis/TargetLibraryInfo.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/SubtargetFeature.h>
-#include <llvm/Object/COFF.h>
 #include <llvm/Object/ObjectFile.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/FileSystem.h>
@@ -26,8 +30,15 @@
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/IPO/AlwaysInliner.h>
 #include <llvm/Transforms/Utils/BasicBlockUtils.h>
-
+#include <memory>
 #include <numeric>
+#include <string>
+#include <string_view>
+#include <system_error>
+
+#if WASMEDGE_OS_WINDOWS
+#include <llvm/Object/COFF.h>
+#endif
 
 #if LLVM_VERSION_MAJOR >= 12
 #include <llvm/Analysis/AliasAnalysis.h>
@@ -55,7 +66,7 @@
 
 namespace {
 
-/// is x86_64
+// is x86_64
 #if defined(_M_X64) && !defined(__x86_64__)
 #define __x86_64__ 1
 #endif
@@ -115,22 +126,17 @@ static llvm::Value *createLikely(llvm::IRBuilder<> &Builder,
                                  llvm::Value *Value);
 class FunctionCompiler;
 
-template <typename... Ts> struct overloaded : Ts... {
-  using Ts::operator()...;
-};
-template <typename... Ts> overloaded(Ts...) -> overloaded<Ts...>;
-
-/// XXX: Misalignment handler not implemented yet, forcing unalignment
-/// force unalignment load/store
+// XXX: Misalignment handler not implemented yet, forcing unalignment
+// force unalignment load/store
 static inline constexpr const bool kForceUnalignment = true;
 
-/// force checking div/rem on zero
+// force checking div/rem on zero
 static inline constexpr const bool kForceDivCheck = true;
 
-/// Size of a ValVariant
+// Size of a ValVariant
 static inline constexpr const uint32_t kValSize = sizeof(WasmEdge::ValVariant);
 
-/// Translate Compiler::OptimizationLevel to llvm::PassBuilder version
+// Translate Compiler::OptimizationLevel to llvm::PassBuilder version
 static inline llvm::PassBuilder::OptimizationLevel
 toLLVMLevel(WasmEdge::CompilerConfigure::OptimizationLevel Level) {
   using OL = WasmEdge::CompilerConfigure::OptimizationLevel;
@@ -148,7 +154,7 @@ toLLVMLevel(WasmEdge::CompilerConfigure::OptimizationLevel Level) {
   case OL::Oz:
     return llvm::PassBuilder::OptimizationLevel::Oz;
   default:
-    assuming(false);
+    assumingUnreachable();
   }
 }
 
@@ -267,7 +273,6 @@ struct WasmEdge::AOT::Compiler::CompileContext {
   std::vector<llvm::Type *> Globals;
   llvm::GlobalVariable *IntrinsicsTable;
   llvm::Function *Trap;
-  uint32_t MemMin = 1, MemMax = 65536;
   CompileContext(llvm::Module &M, bool IsGenericBinary)
       : LLContext(M.getContext()), LLModule(M),
         VoidTy(llvm::Type::getVoidTy(LLContext)),
@@ -291,17 +296,17 @@ struct WasmEdge::AOT::Compiler::CompileContext {
         Int128PtrTy(Int128Ty->getPointerTo()),
         ExecCtxTy(llvm::StructType::create(
             "ExecCtx",
-            /// Memory
-            Int8PtrTy,
-            /// Globals
+            // Memory
+            Int8PtrTy->getPointerTo(),
+            // Globals
             Int128PtrTy->getPointerTo(),
-            /// InstrCount
+            // InstrCount
             Int64PtrTy,
-            /// CostTable
+            // CostTable
             llvm::ArrayType::get(Int64Ty, UINT16_MAX + 1)->getPointerTo(),
-            /// Gas
+            // Gas
             Int64PtrTy,
-            /// StopToken
+            // StopToken
             llvm::Type::getInt32PtrTy(LLContext))),
         ExecCtxPtrTy(ExecCtxTy->getPointerTo()),
         IntrinsicsTableTy(llvm::ArrayType::get(
@@ -352,7 +357,7 @@ struct WasmEdge::AOT::Compiler::CompileContext {
     }
 
     {
-      /// create trap
+      // create trap
       llvm::IRBuilder<> Builder(
           llvm::BasicBlock::Create(LLContext, "entry", Trap));
       auto *CallTrap = Builder.CreateCall(
@@ -363,12 +368,16 @@ struct WasmEdge::AOT::Compiler::CompileContext {
       Builder.CreateUnreachable();
     }
   }
-  llvm::Value *getMemory(llvm::IRBuilder<> &Builder, llvm::LoadInst *ExecCtx) {
-    return Builder.CreateExtractValue(ExecCtx, {0});
+  llvm::Value *getMemory(llvm::IRBuilder<> &Builder, llvm::LoadInst *ExecCtx,
+                         uint32_t Index) {
+    auto *Array = Builder.CreateExtractValue(ExecCtx, {0});
+    auto *VPtr = Builder.CreateLoad(
+        Int8PtrTy, Builder.CreateConstInBoundsGEP1_64(Int8PtrTy, Array, Index));
+    return Builder.CreateBitCast(VPtr, Int8PtrTy);
   }
-  std::pair<llvm::Type *, llvm::Value *> getGlobals(llvm::IRBuilder<> &Builder,
-                                                    llvm::LoadInst *ExecCtx,
-                                                    uint32_t Index) {
+  std::pair<llvm::Type *, llvm::Value *> getGlobal(llvm::IRBuilder<> &Builder,
+                                                   llvm::LoadInst *ExecCtx,
+                                                   uint32_t Index) {
     llvm::Type *Ty = Globals[Index];
     auto *Array = Builder.CreateExtractValue(ExecCtx, {1});
     auto *VPtr = Builder.CreateLoad(
@@ -406,24 +415,22 @@ struct WasmEdge::AOT::Compiler::CompileContext {
                                 Builder.CreateLoad(Ty->getPointerTo(), Ptr));
   }
   std::pair<std::vector<ValType>, std::vector<ValType>>
-  resolveBlockType(const BlockType &Type) const {
+  resolveBlockType(const BlockType &BType) const {
     using VecT = std::vector<ValType>;
     using RetT = std::pair<VecT, VecT>;
-    return std::visit(overloaded{[](const ValType &VType) -> RetT {
-                                   if (VType == ValType::None) {
-                                     return RetT{};
-                                   }
-                                   return RetT{{}, {VType}};
-                                 },
-                                 [this](const uint32_t &Index) -> RetT {
-                                   const auto &FType = *FunctionTypes[Index];
-                                   return RetT{
-                                       VecT(FType.getParamTypes().begin(),
-                                            FType.getParamTypes().end()),
-                                       VecT(FType.getReturnTypes().begin(),
-                                            FType.getReturnTypes().end())};
-                                 }},
-                      Type);
+    if (BType.IsValType) {
+      if (BType.Data.Type == ValType::None) {
+        return RetT{};
+      }
+      return RetT{{}, {BType.Data.Type}};
+    } else {
+      // Type index case. t2* = type[index].returns
+      const uint32_t TypeIdx = BType.Data.Idx;
+      const auto &FType = *FunctionTypes[TypeIdx];
+      return RetT{
+          VecT(FType.getParamTypes().begin(), FType.getParamTypes().end()),
+          VecT(FType.getReturnTypes().begin(), FType.getReturnTypes().end())};
+    }
   }
 };
 
@@ -452,8 +459,7 @@ static llvm::Type *toLLVMType(llvm::LLVMContext &LLContext,
   case ValType::F64:
     return llvm::Type::getDoubleTy(LLContext);
   default:
-    assuming(false);
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 
@@ -515,8 +521,7 @@ static llvm::Constant *toLLVMConstantZero(llvm::LLVMContext &LLContext,
   case ValType::F64:
     return llvm::ConstantFP::get(llvm::Type::getDoubleTy(LLContext), 0.0);
   default:
-    assuming(false);
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 
@@ -541,7 +546,7 @@ public:
 
       if (GasMeasuring) {
         LocalGas = Builder.CreateAlloca(Context.Int64Ty);
-        readGas();
+        Builder.CreateStore(Builder.getInt64(0), LocalGas);
       }
 
       for (llvm::Argument *Arg = F->arg_begin() + 1; Arg != F->arg_end();
@@ -588,7 +593,7 @@ public:
     for (auto &[Error, BB] : TrapBB) {
       Builder.SetInsertPoint(BB);
       updateInstrCount();
-      writeGas();
+      updateGas();
       auto *CallTrap = Builder.CreateCall(
           Context.Trap, {Builder.getInt8(static_cast<uint8_t>(Error))});
       CallTrap->setDoesNotReturn();
@@ -622,6 +627,7 @@ public:
         enterBlock(EndBlock, nullptr, nullptr, std::move(Args),
                    std::move(Type));
         checkStop();
+        updateGas();
         return;
       }
       case OpCode::Loop: {
@@ -653,6 +659,7 @@ public:
         }
         enterBlock(Loop, EndLoop, nullptr, std::move(Args), std::move(Type));
         checkStop();
+        updateGas();
         return;
       }
       case OpCode::If: {
@@ -746,7 +753,7 @@ public:
         break;
       }
       case OpCode::Br_table: {
-        const auto &LabelTable = Instr.getLabelList();
+        auto LabelTable = Instr.getLabelList();
         assuming(LabelTable.size() <= std::numeric_limits<uint32_t>::max());
         const uint32_t LabelTableSize =
             static_cast<uint32_t>(LabelTable.size());
@@ -765,12 +772,12 @@ public:
       }
       case OpCode::Call:
         updateInstrCount();
-        writeGas();
+        updateGas();
         compileCallOp(Instr.getTargetIndex());
         break;
       case OpCode::Call_indirect:
         updateInstrCount();
-        writeGas();
+        updateGas();
         compileIndirectCallOp(Instr.getSourceIndex(), Instr.getTargetIndex());
         break;
       case OpCode::Ref__null:
@@ -813,15 +820,14 @@ public:
         break;
       case OpCode::Global__get: {
         const auto G =
-            Context.getGlobals(Builder, ExecCtx, Instr.getTargetIndex());
+            Context.getGlobal(Builder, ExecCtx, Instr.getTargetIndex());
         stackPush(Builder.CreateLoad(G.first, G.second));
         break;
       }
       case OpCode::Global__set:
         Builder.CreateStore(
             stackPop(),
-            Context.getGlobals(Builder, ExecCtx, Instr.getTargetIndex())
-                .second);
+            Context.getGlobal(Builder, ExecCtx, Instr.getTargetIndex()).second);
         break;
       case OpCode::Table__get: {
         auto *Idx = stackPop();
@@ -883,8 +889,8 @@ public:
                                          Context.Int32Ty, Context.Int32Ty,
                                          Context.Int32Ty},
                                         false)),
-            {Builder.getInt32(Instr.getSourceIndex()),
-             Builder.getInt32(Instr.getTargetIndex()), Dst, Src, Len});
+            {Builder.getInt32(Instr.getTargetIndex()),
+             Builder.getInt32(Instr.getSourceIndex()), Dst, Src, Len});
         break;
       }
       case OpCode::Table__grow: {
@@ -924,105 +930,119 @@ public:
         break;
       }
       case OpCode::I32__load:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int32Ty);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int32Ty);
         break;
       case OpCode::I64__load:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int64Ty);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int64Ty);
         break;
       case OpCode::F32__load:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.FloatTy);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.FloatTy);
         break;
       case OpCode::F64__load:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.DoubleTy);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.DoubleTy);
         break;
       case OpCode::I32__load8_s:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int8Ty, Context.Int32Ty, true);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int8Ty, Context.Int32Ty,
+                      true);
         break;
       case OpCode::I32__load8_u:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int8Ty, Context.Int32Ty, false);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int8Ty, Context.Int32Ty,
+                      false);
         break;
       case OpCode::I32__load16_s:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int16Ty, Context.Int32Ty, true);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int16Ty, Context.Int32Ty,
+                      true);
         break;
       case OpCode::I32__load16_u:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int16Ty, Context.Int32Ty, false);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int16Ty, Context.Int32Ty,
+                      false);
         break;
       case OpCode::I64__load8_s:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int8Ty, Context.Int64Ty, true);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int8Ty, Context.Int64Ty,
+                      true);
         break;
       case OpCode::I64__load8_u:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int8Ty, Context.Int64Ty, false);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int8Ty, Context.Int64Ty,
+                      false);
         break;
       case OpCode::I64__load16_s:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int16Ty, Context.Int64Ty, true);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int16Ty, Context.Int64Ty,
+                      true);
         break;
       case OpCode::I64__load16_u:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int16Ty, Context.Int64Ty, false);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int16Ty, Context.Int64Ty,
+                      false);
         break;
       case OpCode::I64__load32_s:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int32Ty, Context.Int64Ty, true);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int32Ty, Context.Int64Ty,
+                      true);
         break;
       case OpCode::I64__load32_u:
-        compileLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                      Context.Int32Ty, Context.Int64Ty, false);
+        compileLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                      Instr.getMemoryAlign(), Context.Int32Ty, Context.Int64Ty,
+                      false);
         break;
 
       case OpCode::I32__store:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.Int32Ty);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.Int32Ty);
         break;
       case OpCode::I64__store:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.Int64Ty);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.Int64Ty);
         break;
       case OpCode::F32__store:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.FloatTy);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.FloatTy);
         break;
       case OpCode::F64__store:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.DoubleTy);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.DoubleTy);
         break;
       case OpCode::I32__store8:
       case OpCode::I64__store8:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.Int8Ty, true);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.Int8Ty, true);
         break;
       case OpCode::I32__store16:
       case OpCode::I64__store16:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.Int16Ty, true);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.Int16Ty, true);
         break;
       case OpCode::I64__store32:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.Int32Ty, true);
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.Int32Ty, true);
         break;
       case OpCode::Memory__size:
-        stackPush(Builder.CreateCall(Context.getIntrinsic(
-            Builder, AST::Module::Intrinsics::kMemSize,
-            llvm::FunctionType::get(Context.Int32Ty, false))));
+        stackPush(Builder.CreateCall(
+            Context.getIntrinsic(Builder, AST::Module::Intrinsics::kMemSize,
+                                 llvm::FunctionType::get(Context.Int32Ty,
+                                                         {Context.Int32Ty},
+                                                         false)),
+            {Builder.getInt32(Instr.getTargetIndex())}));
         break;
       case OpCode::Memory__grow: {
         auto *Diff = stackPop();
         stackPush(Builder.CreateCall(
-            Context.getIntrinsic(Builder, AST::Module::Intrinsics::kMemGrow,
-                                 llvm::FunctionType::get(Context.Int32Ty,
-                                                         {Context.Int32Ty},
-                                                         false)),
-            {Diff}));
+            Context.getIntrinsic(
+                Builder, AST::Module::Intrinsics::kMemGrow,
+                llvm::FunctionType::get(Context.Int32Ty,
+                                        {Context.Int32Ty, Context.Int32Ty},
+                                        false)),
+            {Builder.getInt32(Instr.getTargetIndex()), Diff}));
         break;
       }
       case OpCode::Memory__init: {
@@ -1034,9 +1054,11 @@ public:
                 Builder, AST::Module::Intrinsics::kMemInit,
                 llvm::FunctionType::get(Context.VoidTy,
                                         {Context.Int32Ty, Context.Int32Ty,
-                                         Context.Int32Ty, Context.Int32Ty},
+                                         Context.Int32Ty, Context.Int32Ty,
+                                         Context.Int32Ty},
                                         false)),
-            {Builder.getInt32(Instr.getSourceIndex()), Dst, Src, Len});
+            {Builder.getInt32(Instr.getTargetIndex()),
+             Builder.getInt32(Instr.getSourceIndex()), Dst, Src, Len});
         break;
       }
       case OpCode::Data__drop: {
@@ -1054,11 +1076,13 @@ public:
         Builder.CreateCall(
             Context.getIntrinsic(
                 Builder, AST::Module::Intrinsics::kMemCopy,
-                llvm::FunctionType::get(
-                    Context.VoidTy,
-                    {Context.Int32Ty, Context.Int32Ty, Context.Int32Ty},
-                    false)),
-            {Dst, Src, Len});
+                llvm::FunctionType::get(Context.VoidTy,
+                                        {Context.Int32Ty, Context.Int32Ty,
+                                         Context.Int32Ty, Context.Int32Ty,
+                                         Context.Int32Ty},
+                                        false)),
+            {Builder.getInt32(Instr.getTargetIndex()),
+             Builder.getInt32(Instr.getSourceIndex()), Dst, Src, Len});
         break;
       }
       case OpCode::Memory__fill: {
@@ -1068,10 +1092,11 @@ public:
         Builder.CreateCall(
             Context.getIntrinsic(
                 Builder, AST::Module::Intrinsics::kMemFill,
-                llvm::FunctionType::get(
-                    Context.VoidTy,
-                    {Context.Int32Ty, Context.Int8Ty, Context.Int32Ty}, false)),
-            {Off, Val, Len});
+                llvm::FunctionType::get(Context.VoidTy,
+                                        {Context.Int32Ty, Context.Int32Ty,
+                                         Context.Int8Ty, Context.Int32Ty},
+                                        false)),
+            {Builder.getInt32(Instr.getTargetIndex()), Off, Val, Len});
         break;
       }
       case OpCode::I32__const:
@@ -1242,7 +1267,7 @@ public:
 #if LLVM_VERSION_MAJOR >= 10
         stackPush(Builder.CreateFPTrunc(stackPop(), Context.FloatTy));
 #else
-        /// llvm 9 didn't add constrains on fptrunc, do it manually.
+        // llvm 9 didn't add constrains on fptrunc, do it manually.
         auto &LLContext = Context.LLContext;
         auto *Value = stackPop();
         auto ExceptStr = llvm::ConstrainedFPIntrinsic::ExceptionBehaviorToStr(
@@ -1758,106 +1783,118 @@ public:
         break;
       }
       case OpCode::V128__load:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                            Context.Int128x1Ty);
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(), Context.Int128x1Ty);
         break;
       case OpCode::V128__load8x8_s:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(),
                             llvm::VectorType::get(Context.Int8Ty, 8, false),
                             Context.Int16x8Ty, true);
         break;
       case OpCode::V128__load8x8_u:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(),
                             llvm::VectorType::get(Context.Int8Ty, 8, false),
                             Context.Int16x8Ty, false);
         break;
       case OpCode::V128__load16x4_s:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(),
                             llvm::VectorType::get(Context.Int16Ty, 4, false),
                             Context.Int32x4Ty, true);
         break;
       case OpCode::V128__load16x4_u:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(),
                             llvm::VectorType::get(Context.Int16Ty, 4, false),
                             Context.Int32x4Ty, false);
         break;
       case OpCode::V128__load32x2_s:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(),
                             llvm::VectorType::get(Context.Int32Ty, 2, false),
                             Context.Int64x2Ty, true);
         break;
       case OpCode::V128__load32x2_u:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(),
                             llvm::VectorType::get(Context.Int32Ty, 2, false),
                             Context.Int64x2Ty, false);
         break;
       case OpCode::V128__load8_splat:
-        compileSplatLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Context.Int8Ty, Context.Int8x16Ty);
-        break;
-      case OpCode::V128__load16_splat:
-        compileSplatLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Context.Int16Ty, Context.Int16x8Ty);
-        break;
-      case OpCode::V128__load32_splat:
-        compileSplatLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Context.Int32Ty, Context.Int32x4Ty);
-        break;
-      case OpCode::V128__load64_splat:
-        compileSplatLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Context.Int64Ty, Context.Int64x2Ty);
-        break;
-      case OpCode::V128__load32_zero:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                            Context.Int32Ty, Context.Int128Ty, false);
-        break;
-      case OpCode::V128__load64_zero:
-        compileVectorLoadOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                            Context.Int64Ty, Context.Int128Ty, false);
-        break;
-      case OpCode::V128__store:
-        compileStoreOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                       Context.Int128x1Ty, false, true);
-        break;
-      case OpCode::V128__load8_lane:
-        compileLoadLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                          Instr.getTargetIndex(), Context.Int8Ty,
-                          Context.Int8x16Ty);
-        break;
-      case OpCode::V128__load16_lane:
-        compileLoadLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                          Instr.getTargetIndex(), Context.Int16Ty,
-                          Context.Int16x8Ty);
-        break;
-      case OpCode::V128__load32_lane:
-        compileLoadLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                          Instr.getTargetIndex(), Context.Int32Ty,
-                          Context.Int32x4Ty);
-        break;
-      case OpCode::V128__load64_lane:
-        compileLoadLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                          Instr.getTargetIndex(), Context.Int64Ty,
-                          Context.Int64x2Ty);
-        break;
-      case OpCode::V128__store8_lane:
-        compileStoreLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Instr.getTargetIndex(), Context.Int8Ty,
+        compileSplatLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Context.Int8Ty,
                            Context.Int8x16Ty);
         break;
-      case OpCode::V128__store16_lane:
-        compileStoreLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Instr.getTargetIndex(), Context.Int16Ty,
+      case OpCode::V128__load16_splat:
+        compileSplatLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Context.Int16Ty,
                            Context.Int16x8Ty);
         break;
-      case OpCode::V128__store32_lane:
-        compileStoreLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Instr.getTargetIndex(), Context.Int32Ty,
+      case OpCode::V128__load32_splat:
+        compileSplatLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Context.Int32Ty,
                            Context.Int32x4Ty);
         break;
-      case OpCode::V128__store64_lane:
-        compileStoreLaneOp(Instr.getMemoryOffset(), Instr.getMemoryAlign(),
-                           Instr.getTargetIndex(), Context.Int64Ty,
+      case OpCode::V128__load64_splat:
+        compileSplatLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Context.Int64Ty,
                            Context.Int64x2Ty);
+        break;
+      case OpCode::V128__load32_zero:
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(), Context.Int32Ty,
+                            Context.Int128Ty, false);
+        break;
+      case OpCode::V128__load64_zero:
+        compileVectorLoadOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                            Instr.getMemoryAlign(), Context.Int64Ty,
+                            Context.Int128Ty, false);
+        break;
+      case OpCode::V128__store:
+        compileStoreOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                       Instr.getMemoryAlign(), Context.Int128x1Ty, false, true);
+        break;
+      case OpCode::V128__load8_lane:
+        compileLoadLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                          Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                          Context.Int8Ty, Context.Int8x16Ty);
+        break;
+      case OpCode::V128__load16_lane:
+        compileLoadLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                          Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                          Context.Int16Ty, Context.Int16x8Ty);
+        break;
+      case OpCode::V128__load32_lane:
+        compileLoadLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                          Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                          Context.Int32Ty, Context.Int32x4Ty);
+        break;
+      case OpCode::V128__load64_lane:
+        compileLoadLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                          Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                          Context.Int64Ty, Context.Int64x2Ty);
+        break;
+      case OpCode::V128__store8_lane:
+        compileStoreLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                           Context.Int8Ty, Context.Int8x16Ty);
+        break;
+      case OpCode::V128__store16_lane:
+        compileStoreLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                           Context.Int16Ty, Context.Int16x8Ty);
+        break;
+      case OpCode::V128__store32_lane:
+        compileStoreLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                           Context.Int32Ty, Context.Int32x4Ty);
+        break;
+      case OpCode::V128__store64_lane:
+        compileStoreLaneOp(Instr.getTargetIndex(), Instr.getMemoryOffset(),
+                           Instr.getMemoryAlign(), Instr.getMemoryLane(),
+                           Context.Int64Ty, Context.Int64x2Ty);
         break;
       case OpCode::V128__const: {
         const auto Value = Instr.getNum().get<uint64x2_t>();
@@ -1879,50 +1916,50 @@ public:
         break;
       }
       case OpCode::I8x16__extract_lane_s:
-        compileExtractLaneOp(Context.Int8x16Ty, Instr.getTargetIndex(),
+        compileExtractLaneOp(Context.Int8x16Ty, Instr.getMemoryLane(),
                              Context.Int32Ty, true);
         break;
       case OpCode::I8x16__extract_lane_u:
-        compileExtractLaneOp(Context.Int8x16Ty, Instr.getTargetIndex(),
+        compileExtractLaneOp(Context.Int8x16Ty, Instr.getMemoryLane(),
                              Context.Int32Ty, false);
         break;
       case OpCode::I8x16__replace_lane:
-        compileReplaceLaneOp(Context.Int8x16Ty, Instr.getTargetIndex());
+        compileReplaceLaneOp(Context.Int8x16Ty, Instr.getMemoryLane());
         break;
       case OpCode::I16x8__extract_lane_s:
-        compileExtractLaneOp(Context.Int16x8Ty, Instr.getTargetIndex(),
+        compileExtractLaneOp(Context.Int16x8Ty, Instr.getMemoryLane(),
                              Context.Int32Ty, true);
         break;
       case OpCode::I16x8__extract_lane_u:
-        compileExtractLaneOp(Context.Int16x8Ty, Instr.getTargetIndex(),
+        compileExtractLaneOp(Context.Int16x8Ty, Instr.getMemoryLane(),
                              Context.Int32Ty, false);
         break;
       case OpCode::I16x8__replace_lane:
-        compileReplaceLaneOp(Context.Int16x8Ty, Instr.getTargetIndex());
+        compileReplaceLaneOp(Context.Int16x8Ty, Instr.getMemoryLane());
         break;
       case OpCode::I32x4__extract_lane:
-        compileExtractLaneOp(Context.Int32x4Ty, Instr.getTargetIndex());
+        compileExtractLaneOp(Context.Int32x4Ty, Instr.getMemoryLane());
         break;
       case OpCode::I32x4__replace_lane:
-        compileReplaceLaneOp(Context.Int32x4Ty, Instr.getTargetIndex());
+        compileReplaceLaneOp(Context.Int32x4Ty, Instr.getMemoryLane());
         break;
       case OpCode::I64x2__extract_lane:
-        compileExtractLaneOp(Context.Int64x2Ty, Instr.getTargetIndex());
+        compileExtractLaneOp(Context.Int64x2Ty, Instr.getMemoryLane());
         break;
       case OpCode::I64x2__replace_lane:
-        compileReplaceLaneOp(Context.Int64x2Ty, Instr.getTargetIndex());
+        compileReplaceLaneOp(Context.Int64x2Ty, Instr.getMemoryLane());
         break;
       case OpCode::F32x4__extract_lane:
-        compileExtractLaneOp(Context.Floatx4Ty, Instr.getTargetIndex());
+        compileExtractLaneOp(Context.Floatx4Ty, Instr.getMemoryLane());
         break;
       case OpCode::F32x4__replace_lane:
-        compileReplaceLaneOp(Context.Floatx4Ty, Instr.getTargetIndex());
+        compileReplaceLaneOp(Context.Floatx4Ty, Instr.getMemoryLane());
         break;
       case OpCode::F64x2__extract_lane:
-        compileExtractLaneOp(Context.Doublex2Ty, Instr.getTargetIndex());
+        compileExtractLaneOp(Context.Doublex2Ty, Instr.getMemoryLane());
         break;
       case OpCode::F64x2__replace_lane:
-        compileReplaceLaneOp(Context.Doublex2Ty, Instr.getTargetIndex());
+        compileReplaceLaneOp(Context.Doublex2Ty, Instr.getMemoryLane());
         break;
       case OpCode::I8x16__swizzle: {
         auto *Index = Builder.CreateBitCast(stackPop(), Context.Int8x16Ty);
@@ -2660,12 +2697,12 @@ public:
         break;
 
       default:
-        assuming(false);
+        assumingUnreachable();
       }
       return;
     };
     for (const auto &Instr : Instrs) {
-      /// Update instruction count
+      // Update instruction count
       if (LocalInstrCount) {
         Builder.CreateStore(
             Builder.CreateAdd(
@@ -2676,15 +2713,16 @@ public:
       if (LocalGas) {
         auto *NewGas = Builder.CreateAdd(
             Builder.CreateLoad(Context.Int64Ty, LocalGas),
-            Builder.CreateLoad(Context.Int64Ty,
-                               Builder.CreateConstInBoundsGEP2_64(
-                                   Context.Int64PtrTy,
-                                   Context.getCostTable(Builder, ExecCtx), 0,
-                                   uint16_t(Instr.getOpCode()))));
+            Builder.CreateLoad(
+                Context.Int64Ty,
+                Builder.CreateConstInBoundsGEP2_64(
+                    llvm::ArrayType::get(Context.Int64Ty, UINT16_MAX + 1),
+                    Context.getCostTable(Builder, ExecCtx), 0,
+                    uint16_t(Instr.getOpCode()))));
         Builder.CreateStore(NewGas, LocalGas);
       }
 
-      /// Make the instruction node according to Code.
+      // Make the instruction node according to Code.
       Dispatch(Instr);
     }
   }
@@ -2843,7 +2881,7 @@ public:
 
   void compileReturn() {
     updateInstrCount();
-    writeGas();
+    updateGas();
     auto *Ty = F->getReturnType();
     if (Ty->isVoidTy()) {
       Builder.CreateRetVoid();
@@ -2862,28 +2900,27 @@ public:
 
   void updateInstrCount() {
     if (LocalInstrCount) {
-      auto *Ptr = Context.getInstrCount(Builder, ExecCtx);
-      Builder.CreateStore(
-          Builder.CreateAdd(
-              Builder.CreateLoad(Context.Int64Ty, LocalInstrCount),
-              Builder.CreateLoad(Context.Int64Ty, Ptr)),
-          Ptr);
+      Builder.CreateAtomicRMW(
+          llvm::AtomicRMWInst::BinOp::Add,
+          Context.getInstrCount(Builder, ExecCtx),
+          Builder.CreateLoad(Context.Int64Ty, LocalInstrCount),
+#if LLVM_VERSION_MAJOR >= 13
+          llvm::MaybeAlign(8),
+#endif
+          llvm::AtomicOrdering::Monotonic);
       Builder.CreateStore(Builder.getInt64(0), LocalInstrCount);
     }
   }
 
-  void readGas() {
+  void updateGas() {
     if (LocalGas) {
-      Builder.CreateStore(
-          Builder.CreateLoad(Context.Int64Ty, Context.getGas(Builder, ExecCtx)),
-          LocalGas);
-    }
-  }
-
-  void writeGas() {
-    if (LocalGas) {
-      Builder.CreateStore(Builder.CreateLoad(Context.Int64Ty, LocalGas),
-                          Context.getGas(Builder, ExecCtx));
+      Builder.CreateAtomicRMW(llvm::AtomicRMWInst::BinOp::Add,
+                              Context.getGas(Builder, ExecCtx),
+                              Builder.CreateLoad(Context.Int64Ty, LocalGas),
+#if LLVM_VERSION_MAJOR >= 13
+                              llvm::MaybeAlign(8),
+#endif
+                              llvm::AtomicOrdering::Monotonic);
     }
   }
 
@@ -2912,12 +2949,14 @@ private:
     } else {
       stackPush(Ret);
     }
-
-    readGas();
   }
 
   void compileIndirectCallOp(const uint32_t TableIndex,
                              const uint32_t FuncTypeIndex) {
+    auto *NotNullBB = llvm::BasicBlock::Create(LLContext, "c_i.not_null", F);
+    auto *IsNullBB = llvm::BasicBlock::Create(LLContext, "c_i.is_null", F);
+    auto *EndBB = llvm::BasicBlock::Create(LLContext, "c_i.end", F);
+
     llvm::Value *FuncIndex = stackPop();
     const auto &FuncType = *Context.FunctionTypes[FuncTypeIndex];
     auto *FTy = toLLVMType(Context.ExecCtxPtrTy, FuncType);
@@ -2926,67 +2965,116 @@ private:
     const size_t ArgSize = FuncType.getParamTypes().size();
     const size_t RetSize =
         RTy->isVoidTy() ? 0 : FuncType.getReturnTypes().size();
-
-    llvm::Value *Args;
-    if (ArgSize == 0) {
-      Args = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
-    } else {
-      auto *Alloca = Builder.CreateAlloca(Builder.getInt8Ty(),
-                                          Builder.getInt64(ArgSize * kValSize));
-      Alloca->setAlignment(Align(kValSize));
-      Args = Alloca;
-    }
-
-    llvm::Value *Rets;
-    if (RetSize == 0) {
-      Rets = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
-    } else {
-      auto *Alloca = Builder.CreateAlloca(Builder.getInt8Ty(),
-                                          Builder.getInt64(RetSize * kValSize));
-      Alloca->setAlignment(Align(kValSize));
-      Rets = Alloca;
-    }
-
+    std::vector<llvm::Value *> ArgsVec(ArgSize + 1, nullptr);
+    ArgsVec[0] = F->arg_begin();
     for (size_t I = 0; I < ArgSize; ++I) {
-      const size_t J = ArgSize - 1 - I;
-      auto *Arg = stackPop();
-      auto *Ptr = Builder.CreateConstInBoundsGEP1_64(Context.Int8Ty, Args,
-                                                     J * kValSize);
-      Builder.CreateStore(
-          Arg, Builder.CreateBitCast(Ptr, Arg->getType()->getPointerTo()));
+      const size_t J = ArgSize - I;
+      ArgsVec[J] = stackPop();
     }
 
-    Builder.CreateCall(
-        Context.getIntrinsic(
-            Builder, AST::Module::Intrinsics::kCallIndirect,
-            llvm::FunctionType::get(Context.VoidTy,
-                                    {Context.Int32Ty, Context.Int32Ty,
-                                     Context.Int32Ty, Context.Int8PtrTy,
-                                     Context.Int8PtrTy},
-                                    false)),
-        {Builder.getInt32(TableIndex), Builder.getInt32(FuncTypeIndex),
-         FuncIndex, Args, Rets});
+    std::vector<llvm::Value *> FPtrRetsVec;
+    FPtrRetsVec.reserve(RetSize);
+    {
+      auto *FPtr = Builder.CreateCall(
+          Context.getIntrinsic(
+              Builder, AST::Module::Intrinsics::kPtrFunc,
+              llvm::FunctionType::get(
+                  FTy->getPointerTo(),
+                  {Context.Int32Ty, Context.Int32Ty, Context.Int32Ty}, false)),
+          {Builder.getInt32(TableIndex), Builder.getInt32(FuncTypeIndex),
+           FuncIndex});
+      Builder.CreateCondBr(
+          createLikely(Builder, Builder.CreateNot(Builder.CreateIsNull(FPtr))),
+          NotNullBB, IsNullBB);
+      Builder.SetInsertPoint(NotNullBB);
 
-    if (RetSize == 0) {
-      // nothing to do
-    } else if (RetSize == 1) {
-      auto *VPtr = Builder.CreateConstInBoundsGEP1_64(Context.Int8Ty, Rets, 0);
-      auto *Ptr = Builder.CreateBitCast(VPtr, RTy->getPointerTo());
-      stackPush(Builder.CreateLoad(RTy, Ptr));
-    } else {
-      for (unsigned I = 0; I < RetSize; ++I) {
-        auto *VPtr = Builder.CreateConstInBoundsGEP1_64(Context.Int8Ty, Rets,
-                                                        I * kValSize);
-        auto *Ptr = Builder.CreateBitCast(
-            VPtr, RTy->getStructElementType(I)->getPointerTo());
-        stackPush(Builder.CreateLoad(RTy->getStructElementType(I), Ptr));
+      auto *FPtrRet =
+          Builder.CreateCall(llvm::FunctionCallee(FTy, FPtr), ArgsVec);
+      if (RetSize == 0) {
+        // nothing to do
+      } else if (RetSize == 1) {
+        FPtrRetsVec.push_back(FPtrRet);
+      } else {
+        for (auto *Val : unpackStruct(Builder, FPtrRet)) {
+          FPtrRetsVec.push_back(Val);
+        }
       }
     }
 
-    readGas();
+    Builder.CreateBr(EndBB);
+    Builder.SetInsertPoint(IsNullBB);
+
+    std::vector<llvm::Value *> RetsVec(RetSize);
+    {
+      llvm::Value *Args;
+      if (ArgSize == 0) {
+        Args = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+      } else {
+        auto *Alloca = Builder.CreateAlloca(
+            Builder.getInt8Ty(), Builder.getInt64(ArgSize * kValSize));
+        Alloca->setAlignment(Align(kValSize));
+        Args = Alloca;
+      }
+
+      llvm::Value *Rets;
+      if (RetSize == 0) {
+        Rets = llvm::ConstantPointerNull::get(Builder.getInt8PtrTy());
+      } else {
+        auto *Alloca = Builder.CreateAlloca(
+            Builder.getInt8Ty(), Builder.getInt64(RetSize * kValSize));
+        Alloca->setAlignment(Align(kValSize));
+        Rets = Alloca;
+      }
+
+      for (size_t I = 0; I < ArgSize; ++I) {
+        auto *Ptr = Builder.CreateConstInBoundsGEP1_64(Context.Int8Ty, Args,
+                                                       I * kValSize);
+        auto *Arg = ArgsVec[I + 1];
+        Builder.CreateStore(
+            Arg, Builder.CreateBitCast(Ptr, Arg->getType()->getPointerTo()));
+      }
+
+      Builder.CreateCall(
+          Context.getIntrinsic(
+              Builder, AST::Module::Intrinsics::kCallIndirect,
+              llvm::FunctionType::get(Context.VoidTy,
+                                      {Context.Int32Ty, Context.Int32Ty,
+                                       Context.Int32Ty, Context.Int8PtrTy,
+                                       Context.Int8PtrTy},
+                                      false)),
+          {Builder.getInt32(TableIndex), Builder.getInt32(FuncTypeIndex),
+           FuncIndex, Args, Rets});
+
+      if (RetSize == 0) {
+        // nothing to do
+      } else if (RetSize == 1) {
+        auto *VPtr =
+            Builder.CreateConstInBoundsGEP1_64(Context.Int8Ty, Rets, 0);
+        auto *Ptr = Builder.CreateBitCast(VPtr, RTy->getPointerTo());
+        RetsVec[0] = Builder.CreateLoad(RTy, Ptr);
+      } else {
+        for (unsigned I = 0; I < RetSize; ++I) {
+          auto *VPtr = Builder.CreateConstInBoundsGEP1_64(Context.Int8Ty, Rets,
+                                                          I * kValSize);
+          auto *Ptr = Builder.CreateBitCast(
+              VPtr, RTy->getStructElementType(I)->getPointerTo());
+          RetsVec[I] = Builder.CreateLoad(RTy->getStructElementType(I), Ptr);
+        }
+      }
+      Builder.CreateBr(EndBB);
+      Builder.SetInsertPoint(EndBB);
+    }
+
+    for (unsigned I = 0; I < RetSize; ++I) {
+      auto *PHIRet = Builder.CreatePHI(FPtrRetsVec[I]->getType(), 2);
+      PHIRet->addIncoming(FPtrRetsVec[I], NotNullBB);
+      PHIRet->addIncoming(RetsVec[I], IsNullBB);
+      stackPush(PHIRet);
+    }
   }
 
-  void compileLoadOp(unsigned Offset, unsigned Alignment, llvm::Type *LoadTy) {
+  void compileLoadOp(unsigned MemoryIndex, unsigned Offset, unsigned Alignment,
+                     llvm::Type *LoadTy) {
     if constexpr (kForceUnalignment) {
       Alignment = 0;
     }
@@ -2996,56 +3084,60 @@ private:
     }
 
     auto *VPtr = Builder.CreateInBoundsGEP(
-        Context.Int8Ty, Context.getMemory(Builder, ExecCtx), Off);
+        Context.Int8Ty, Context.getMemory(Builder, ExecCtx, MemoryIndex), Off);
     auto *Ptr = Builder.CreateBitCast(VPtr, LoadTy->getPointerTo());
     auto *LoadInst = Builder.CreateLoad(LoadTy, Ptr, OptNone);
     LoadInst->setAlignment(Align(UINT64_C(1) << Alignment));
     stackPush(LoadInst);
   }
-  void compileLoadOp(unsigned Offset, unsigned Alignment, llvm::Type *LoadTy,
-                     llvm::Type *ExtendTy, bool Signed) {
-    compileLoadOp(Offset, Alignment, LoadTy);
+  void compileLoadOp(unsigned MemoryIndex, unsigned Offset, unsigned Alignment,
+                     llvm::Type *LoadTy, llvm::Type *ExtendTy, bool Signed) {
+    compileLoadOp(MemoryIndex, Offset, Alignment, LoadTy);
     if (Signed) {
       Stack.back() = Builder.CreateSExt(Stack.back(), ExtendTy);
     } else {
       Stack.back() = Builder.CreateZExt(Stack.back(), ExtendTy);
     }
   }
-  void compileVectorLoadOp(unsigned Offset, unsigned Alignment,
-                           llvm::Type *LoadTy) {
-    compileLoadOp(Offset, Alignment, LoadTy);
+  void compileVectorLoadOp(unsigned MemoryIndex, unsigned Offset,
+                           unsigned Alignment, llvm::Type *LoadTy) {
+    compileLoadOp(MemoryIndex, Offset, Alignment, LoadTy);
     Stack.back() = Builder.CreateBitCast(Stack.back(), Context.Int64x2Ty);
   }
-  void compileVectorLoadOp(unsigned Offset, unsigned Alignment,
-                           llvm::Type *LoadTy, llvm::Type *ExtendTy,
-                           bool Signed) {
-    compileLoadOp(Offset, Alignment, LoadTy, ExtendTy, Signed);
+  void compileVectorLoadOp(unsigned MemoryIndex, unsigned Offset,
+                           unsigned Alignment, llvm::Type *LoadTy,
+                           llvm::Type *ExtendTy, bool Signed) {
+    compileLoadOp(MemoryIndex, Offset, Alignment, LoadTy, ExtendTy, Signed);
     Stack.back() = Builder.CreateBitCast(Stack.back(), Context.Int64x2Ty);
   }
-  void compileSplatLoadOp(unsigned Offset, unsigned Alignment,
-                          llvm::Type *LoadTy, llvm::VectorType *VectorTy) {
-    compileLoadOp(Offset, Alignment, LoadTy);
+  void compileSplatLoadOp(unsigned MemoryIndex, unsigned Offset,
+                          unsigned Alignment, llvm::Type *LoadTy,
+                          llvm::VectorType *VectorTy) {
+    compileLoadOp(MemoryIndex, Offset, Alignment, LoadTy);
     compileSplatOp(VectorTy);
   }
-  void compileLoadLaneOp(unsigned Offset, unsigned Alignment, unsigned Index,
-                         llvm::Type *LoadTy, llvm::VectorType *VectorTy) {
+  void compileLoadLaneOp(unsigned MemoryIndex, unsigned Offset,
+                         unsigned Alignment, unsigned Index, llvm::Type *LoadTy,
+                         llvm::VectorType *VectorTy) {
     auto *Vector = stackPop();
-    compileLoadOp(Offset, Alignment, LoadTy);
+    compileLoadOp(MemoryIndex, Offset, Alignment, LoadTy);
     auto *Value = Stack.back();
     Stack.back() = Builder.CreateBitCast(
         Builder.CreateInsertElement(Builder.CreateBitCast(Vector, VectorTy),
                                     Value, Index),
         Context.Int64x2Ty);
   }
-  void compileStoreLaneOp(unsigned Offset, unsigned Alignment, unsigned Index,
+  void compileStoreLaneOp(unsigned MemoryIndex, unsigned Offset,
+                          unsigned Alignment, unsigned Index,
                           llvm::Type *LoadTy, llvm::VectorType *VectorTy) {
     auto *Vector = Stack.back();
     Stack.back() = Builder.CreateExtractElement(
         Builder.CreateBitCast(Vector, VectorTy), Index);
-    compileStoreOp(Offset, Alignment, LoadTy);
+    compileStoreOp(MemoryIndex, Offset, Alignment, LoadTy);
   }
-  void compileStoreOp(unsigned Offset, unsigned Alignment, llvm::Type *LoadTy,
-                      bool Trunc = false, bool BitCast = false) {
+  void compileStoreOp(unsigned MemoryIndex, unsigned Offset, unsigned Alignment,
+                      llvm::Type *LoadTy, bool Trunc = false,
+                      bool BitCast = false) {
     if constexpr (kForceUnalignment) {
       Alignment = 0;
     }
@@ -3062,7 +3154,7 @@ private:
       V = Builder.CreateBitCast(V, LoadTy);
     }
     auto *VPtr = Builder.CreateInBoundsGEP(
-        Context.Int8Ty, Context.getMemory(Builder, ExecCtx), Off);
+        Context.Int8Ty, Context.getMemory(Builder, ExecCtx, MemoryIndex), Off);
     auto *Ptr = Builder.CreateBitCast(VPtr, LoadTy->getPointerTo());
     auto *StoreInst = Builder.CreateStore(V, Ptr, OptNone);
     StoreInst->setAlignment(Align(UINT64_C(1) << Alignment));
@@ -3731,7 +3823,7 @@ private:
         llvm::AtomicRMWInst::BinOp::Xchg,
         Context.getStopToken(Builder, ExecCtx), Builder.getInt32(0),
 #if LLVM_VERSION_MAJOR >= 13
-        llvm::MaybeAlign(),
+        llvm::MaybeAlign(4),
 #endif
         llvm::AtomicOrdering::Monotonic);
     auto *NotStop = createLikely(
@@ -3877,7 +3969,7 @@ static llvm::Value *createLikely(llvm::IRBuilder<> &Builder,
                                        Builder.getTrue());
 }
 
-/// Write output object and link
+// Write output object and link
 Expect<void> outputNativeLibrary(const std::filesystem::path &OutputPath,
                                  const llvm::SmallString<0> &OSVec) {
   using namespace std::literals;
@@ -4171,7 +4263,7 @@ Expect<void> outputWasmLibrary(const std::filesystem::path &OutputPath,
     return Unexpect(ErrCode::IllegalPath);
   }
   OS.write(reinterpret_cast<const char *>(Data.data()), Data.size());
-  /// Custom section id
+  // Custom section id
   WriteByte(OS, UINT8_C(0x00));
   WriteName(OS, std::string_view(OSCustomSecVec.data(), OSCustomSecVec.size()));
 
@@ -4188,6 +4280,7 @@ Expect<void> Compiler::compile(Span<const Byte> Data, const AST::Module &Module,
                                std::filesystem::path OutputPath) {
   using namespace std::literals;
 
+  std::unique_lock Lock(Mutex);
   spdlog::info("compile start");
   std::filesystem::path LLPath(OutputPath);
   LLPath.replace_extension("ll"sv);
@@ -4215,25 +4308,25 @@ Expect<void> Compiler::compile(Span<const Byte> Data, const AST::Module &Module,
   };
   RAIICleanup Cleanup(Context, NewContext);
 
-  /// Compile Function Types
+  // Compile Function Types
   compile(Module.getTypeSection());
-  /// Compile ImportSection
+  // Compile ImportSection
   compile(Module.getImportSection());
-  /// Compile GlobalSection
+  // Compile GlobalSection
   compile(Module.getGlobalSection());
-  /// Compile MemorySection (MemorySec, DataSec)
+  // Compile MemorySection (MemorySec, DataSec)
   compile(Module.getMemorySection(), Module.getDataSection());
-  /// Compile TableSection (TableSec, ElemSec)
+  // Compile TableSection (TableSec, ElemSec)
   compile(Module.getTableSection(), Module.getElementSection());
-  /// compile Functions in module. (FunctionSec, CodeSec)
+  // compile Functions in module. (FunctionSec, CodeSec)
   compile(Module.getFunctionSection(), Module.getCodeSection());
-  /// Compile ExportSection
+  // Compile ExportSection
   compile(Module.getExportSection());
-  /// StartSection is not required to compile
+  // StartSection is not required to compile
 
   if (Conf.getCompilerConfigure().getOutputFormat() ==
       CompilerConfigure::OutputFormat::Native) {
-    /// create wasm.code and wasm.size
+    // create wasm.code and wasm.size
     auto *Int32Ty = Context->Int32Ty;
     auto *Content = llvm::ConstantDataArray::getString(
         LLContext,
@@ -4248,7 +4341,7 @@ Expect<void> Compiler::compile(Span<const Byte> Data, const AST::Module &Module,
         llvm::ConstantInt::get(Int32Ty, Data.size()), "wasm.size");
   }
 
-  /// set dllexport
+  // set dllexport
   for (auto &GV : LLModule.global_values()) {
     if (GV.hasExternalLinkage()) {
       GV.setVisibility(llvm::GlobalValue::ProtectedVisibility);
@@ -4403,12 +4496,12 @@ void Compiler::compile(const AST::TypeSection &TypeSec) {
   Context->FunctionTypes.reserve(Size);
   Context->FunctionWrappers.reserve(Size);
 
-  /// Iterate and compile types.
+  // Iterate and compile types.
   for (size_t I = 0; I < Size; ++I) {
     const auto &FuncType = FuncTypes[I];
     const auto Name = "t" + std::to_string(Context->FunctionTypes.size());
 
-    /// Check function type is unique
+    // Check function type is unique
     {
       bool Unique = true;
       for (size_t J = 0; J < I; ++J) {
@@ -4427,7 +4520,7 @@ void Compiler::compile(const AST::TypeSection &TypeSec) {
       }
     }
 
-    /// Create Wrapper
+    // Create Wrapper
     auto *F = llvm::Function::Create(WrapperTy, llvm::Function::ExternalLinkage,
                                      Name, Context->LLModule);
     {
@@ -4486,24 +4579,24 @@ void Compiler::compile(const AST::TypeSection &TypeSec) {
       }
       Builder.CreateRetVoid();
     }
-    /// Copy wrapper, param and return lists to module instance.
+    // Copy wrapper, param and return lists to module instance.
     Context->FunctionTypes.push_back(&FuncType);
     Context->FunctionWrappers.push_back(F);
   }
 }
 
 void Compiler::compile(const AST::ImportSection &ImportSec) {
-  /// Iterate and compile import descriptions.
+  // Iterate and compile import descriptions.
   for (const auto &ImpDesc : ImportSec.getContent()) {
-    /// Get data from import description.
+    // Get data from import description.
     const auto &ExtType = ImpDesc.getExternalType();
 
-    /// Add the imports into module istance.
+    // Add the imports into module istance.
     switch (ExtType) {
-    case ExternalType::Function: /// Function type index
+    case ExternalType::Function: // Function type index
     {
       const auto FuncID = static_cast<uint32_t>(Context->Functions.size());
-      /// Get the function type index in module.
+      // Get the function type index in module.
       uint32_t TypeIdx = ImpDesc.getExternalFuncTypeIdx();
       assuming(TypeIdx < Context->FunctionTypes.size());
       const auto &FuncType = *Context->FunctionTypes[TypeIdx];
@@ -4586,19 +4679,19 @@ void Compiler::compile(const AST::ImportSection &ImportSec) {
       Context->Functions.emplace_back(TypeIdx, F, nullptr);
       break;
     }
-    case ExternalType::Table: /// Table type
+    case ExternalType::Table: // Table type
     {
-      /// Nothing to do.
+      // Nothing to do.
       break;
     }
-    case ExternalType::Memory: /// Memory type
+    case ExternalType::Memory: // Memory type
     {
-      /// Nothing to do.
+      // Nothing to do.
       break;
     }
-    case ExternalType::Global: /// Global type
+    case ExternalType::Global: // Global type
     {
-      /// Get global type. External type checked in validation.
+      // Get global type. External type checked in validation.
       const auto &GlobType = ImpDesc.getExternalGlobalType();
       const auto &ValType = GlobType.getValType();
       auto *Type = toLLVMType(Context->LLContext, ValType);
@@ -4621,16 +4714,7 @@ void Compiler::compile(const AST::GlobalSection &GlobalSec) {
   }
 }
 
-void Compiler::compile(const AST::MemorySection &MemorySec,
-                       const AST::DataSection &) {
-  if (MemorySec.getContent().size() == 0) {
-    return;
-  }
-  assuming(MemorySec.getContent().size() == 1);
-  const auto &Limit = MemorySec.getContent().front().getLimit();
-  Context->MemMin = Limit.getMin();
-  Context->MemMax = Limit.hasMax() ? Limit.getMax() : 65536;
-}
+void Compiler::compile(const AST::MemorySection &, const AST::DataSection &) {}
 
 void Compiler::compile(const AST::TableSection &, const AST::ElementSection &) {
 }

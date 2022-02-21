@@ -34,7 +34,7 @@ chmod +x target/wasm32-wasi/release/wasi_example_main.wasm
 
 Create a file called `Dockerfile` in the `target/wasm32-wasi/release/` folder with the following content:
 
-```
+```dockerfile
 FROM scratch
 ADD wasi_example_main.wasm /
 CMD ["/wasi_example_main.wasm"]
@@ -83,7 +83,7 @@ buildah --help
 In the `target/wasm32-wasi/release/` folder, do the following.
 
 ```bash
-sudo buildah build --annotation "module.wasm.image/variant=compat" -t wasm-wasi-example .
+$ sudo buildah build --annotation "module.wasm.image/variant=compat" -t wasm-wasi-example .
 # make sure docker is install and running
 # systemctl status docker
 # to make sure regular user can use docker
@@ -91,7 +91,7 @@ sudo buildah build --annotation "module.wasm.image/variant=compat" -t wasm-wasi-
 # newgrp docker
 
 # You may need to use docker login to create the `~/.docker/config.json` for auth.
-sudo buildah push --authfile ~/.docker/config.json wasm-wasi-example docker://docker.io/hydai/wasm-wasi-example:with-wasm-annotation
+$ sudo buildah push --authfile ~/.docker/config.json wasm-wasi-example docker://docker.io/hydai/wasm-wasi-example:with-wasm-annotation
 ```
 
 That's it! Now you can try to run it in [CRI-O](../cri/crio.md#run-a-simple-webassembly-app) or [Kubernetes](../kubernetes/kubernetes.md#run-a-simple-webassembly-app)!

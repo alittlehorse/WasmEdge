@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #include "host/wasi/environ.h"
 #include "common/errcode.h"
 #include "common/log.h"
 #include "host/wasi/vfs.h"
 #include "host/wasi/vinode.h"
-#include <random>
 
 using namespace std::literals;
 
@@ -51,7 +52,7 @@ static inline constexpr const __wasi_rights_t kNoInheritingRights =
 void Environ::init(Span<const std::string> Dirs, std::string ProgramName,
                    Span<const std::string> Args, Span<const std::string> Envs) {
   {
-    /// Open dir for WASI environment.
+    // Open dir for WASI environment.
     std::vector<std::shared_ptr<VINode>> PreopenedDirs;
     PreopenedDirs.reserve(Dirs.size());
     for (const auto &Dir : Dirs) {

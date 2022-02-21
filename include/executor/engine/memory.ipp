@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "executor/executor.h"
 #include "runtime/instance/memory.h"
@@ -9,10 +10,11 @@ namespace WasmEdge {
 namespace Executor {
 
 template <typename T>
-TypeT<T> Executor::runLoadOp(Runtime::Instance::MemoryInstance &MemInst,
+TypeT<T> Executor::runLoadOp(Runtime::StackManager &StackMgr,
+                             Runtime::Instance::MemoryInstance &MemInst,
                              const AST::Instruction &Instr,
                              const uint32_t BitWidth) {
-  /// Calculate EA
+  // Calculate EA
   ValVariant &Val = StackMgr.getTop();
   if (Val.get<uint32_t>() >
       std::numeric_limits<uint32_t>::max() - Instr.getMemoryOffset()) {
@@ -26,7 +28,7 @@ TypeT<T> Executor::runLoadOp(Runtime::Instance::MemoryInstance &MemInst,
   }
   uint32_t EA = Val.get<uint32_t>() + Instr.getMemoryOffset();
 
-  /// Value = Mem.Data[EA : N / 8]
+  // Value = Mem.Data[EA : N / 8]
   if (auto Res = MemInst.loadValue(Val.emplace<T>(), EA, BitWidth / 8); !Res) {
     spdlog::error(
         ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));
@@ -36,13 +38,14 @@ TypeT<T> Executor::runLoadOp(Runtime::Instance::MemoryInstance &MemInst,
 }
 
 template <typename T>
-TypeN<T> Executor::runStoreOp(Runtime::Instance::MemoryInstance &MemInst,
+TypeN<T> Executor::runStoreOp(Runtime::StackManager &StackMgr,
+                              Runtime::Instance::MemoryInstance &MemInst,
                               const AST::Instruction &Instr,
                               const uint32_t BitWidth) {
-  /// Pop the value t.const c from the Stack
+  // Pop the value t.const c from the Stack
   T C = StackMgr.pop().get<T>();
 
-  /// Calculate EA = i + offset
+  // Calculate EA = i + offset
   uint32_t I = StackMgr.pop().get<uint32_t>();
   if (I > std::numeric_limits<uint32_t>::max() - Instr.getMemoryOffset()) {
     spdlog::error(ErrCode::MemoryOutOfBounds);
@@ -55,7 +58,7 @@ TypeN<T> Executor::runStoreOp(Runtime::Instance::MemoryInstance &MemInst,
   }
   uint32_t EA = I + Instr.getMemoryOffset();
 
-  /// Store value to bytes.
+  // Store value to bytes.
   if (auto Res = MemInst.storeValue(C, EA, BitWidth / 8); !Res) {
     spdlog::error(
         ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));
@@ -66,10 +69,11 @@ TypeN<T> Executor::runStoreOp(Runtime::Instance::MemoryInstance &MemInst,
 
 template <typename TIn, typename TOut>
 Expect<void>
-Executor::runLoadExpandOp(Runtime::Instance::MemoryInstance &MemInst,
+Executor::runLoadExpandOp(Runtime::StackManager &StackMgr,
+                          Runtime::Instance::MemoryInstance &MemInst,
                           const AST::Instruction &Instr) {
   static_assert(sizeof(TOut) == sizeof(TIn) * 2);
-  /// Calculate EA
+  // Calculate EA
   ValVariant &Val = StackMgr.getTop();
   if (Val.get<uint32_t>() >
       std::numeric_limits<uint32_t>::max() - Instr.getMemoryOffset()) {
@@ -83,7 +87,7 @@ Executor::runLoadExpandOp(Runtime::Instance::MemoryInstance &MemInst,
   }
   uint32_t EA = Val.get<uint32_t>() + Instr.getMemoryOffset();
 
-  /// Value = Mem.Data[EA : N / 8]
+  // Value = Mem.Data[EA : N / 8]
   uint64_t Buffer;
   if (auto Res = MemInst.loadValue(Buffer, EA, 8); !Res) {
     spdlog::error(
@@ -110,9 +114,10 @@ Executor::runLoadExpandOp(Runtime::Instance::MemoryInstance &MemInst,
 
 template <typename T>
 Expect<void>
-Executor::runLoadSplatOp(Runtime::Instance::MemoryInstance &MemInst,
+Executor::runLoadSplatOp(Runtime::StackManager &StackMgr,
+                         Runtime::Instance::MemoryInstance &MemInst,
                          const AST::Instruction &Instr) {
-  /// Calculate EA
+  // Calculate EA
   ValVariant &Val = StackMgr.getTop();
   if (Val.get<uint32_t>() >
       std::numeric_limits<uint32_t>::max() - Instr.getMemoryOffset()) {
@@ -126,7 +131,7 @@ Executor::runLoadSplatOp(Runtime::Instance::MemoryInstance &MemInst,
   }
   uint32_t EA = Val.get<uint32_t>() + Instr.getMemoryOffset();
 
-  /// Value = Mem.Data[EA : N / 8]
+  // Value = Mem.Data[EA : N / 8]
   using VT [[gnu::vector_size(16)]] = T;
   uint64_t Buffer;
   if (auto Res = MemInst.loadValue(Buffer, EA, sizeof(T)); !Res) {
@@ -150,12 +155,13 @@ Executor::runLoadSplatOp(Runtime::Instance::MemoryInstance &MemInst,
 }
 
 template <typename T>
-Expect<void> Executor::runLoadLaneOp(Runtime::Instance::MemoryInstance &MemInst,
+Expect<void> Executor::runLoadLaneOp(Runtime::StackManager &StackMgr,
+                                     Runtime::Instance::MemoryInstance &MemInst,
                                      const AST::Instruction &Instr) {
   using VT [[gnu::vector_size(16)]] = T;
   VT Result = StackMgr.pop().get<VT>();
 
-  /// Calculate EA
+  // Calculate EA
   ValVariant &Val = StackMgr.getTop();
   const uint32_t Offset = Val.get<uint32_t>();
   if (Offset > std::numeric_limits<uint32_t>::max() - Instr.getMemoryOffset()) {
@@ -169,7 +175,7 @@ Expect<void> Executor::runLoadLaneOp(Runtime::Instance::MemoryInstance &MemInst,
   }
   const uint32_t EA = Offset + Instr.getMemoryOffset();
 
-  /// Value = Mem.Data[EA : N / 8]
+  // Value = Mem.Data[EA : N / 8]
   uint64_t Buffer;
   if (auto Res = MemInst.loadValue(Buffer, EA, sizeof(T)); !Res) {
     spdlog::error(
@@ -177,20 +183,21 @@ Expect<void> Executor::runLoadLaneOp(Runtime::Instance::MemoryInstance &MemInst,
     return Unexpect(Res);
   }
 
-  Result[Instr.getTargetIndex()] = static_cast<T>(Buffer);
+  Result[Instr.getMemoryLane()] = static_cast<T>(Buffer);
   Val.emplace<VT>(Result);
   return {};
 }
 
 template <typename T>
 Expect<void>
-Executor::runStoreLaneOp(Runtime::Instance::MemoryInstance &MemInst,
+Executor::runStoreLaneOp(Runtime::StackManager &StackMgr,
+                         Runtime::Instance::MemoryInstance &MemInst,
                          const AST::Instruction &Instr) {
   using VT [[gnu::vector_size(16)]] = T;
   using TBuf = std::conditional_t<sizeof(T) < 4, uint32_t, T>;
-  const TBuf C = StackMgr.pop().get<VT>()[Instr.getTargetIndex()];
+  const TBuf C = StackMgr.pop().get<VT>()[Instr.getMemoryLane()];
 
-  /// Calculate EA = i + offset
+  // Calculate EA = i + offset
   uint32_t I = StackMgr.pop().get<uint32_t>();
   if (I > std::numeric_limits<uint32_t>::max() - Instr.getMemoryOffset()) {
     spdlog::error(ErrCode::MemoryOutOfBounds);
@@ -203,7 +210,7 @@ Executor::runStoreLaneOp(Runtime::Instance::MemoryInstance &MemInst,
   }
   uint32_t EA = I + Instr.getMemoryOffset();
 
-  /// Store value to bytes.
+  // Store value to bytes.
   if (auto Res = MemInst.storeValue(C, EA, sizeof(T)); !Res) {
     spdlog::error(
         ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));

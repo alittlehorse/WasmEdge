@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "system/fault.h"
 
@@ -7,9 +8,10 @@
 #include "common/log.h"
 
 #include <atomic>
-#include <cassert>
 #include <csetjmp>
 #include <csignal>
+#include <cstdint>
+#include <utility>
 
 #if WASMEDGE_OS_WINDOWS
 
@@ -117,7 +119,7 @@ thread_local Fault *localHandler = nullptr;
     assuming(Siginfo->si_code == FPE_INTDIV);
     Fault::emitFault(ErrCode::DivideByZero);
   default:
-    __builtin_unreachable();
+    assumingUnreachable();
   }
 }
 

@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/loader/filemgr.h - File Manager definition ---------------===//
 //
 // Part of the WasmEdge Project.
@@ -16,6 +18,9 @@
 #include "common/types.h"
 #include "system/mmap.h"
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -26,17 +31,17 @@ namespace WasmEdge {
 class FileMgr {
 public:
   enum class FileHeader : uint8_t {
-    /// WASM or universal WASM.
+    // WASM or universal WASM.
     Wasm,
-    /// AOT compiled WASM as Linux ELF.
+    // AOT compiled WASM as Linux ELF.
     ELF,
-    /// AOT compiled WASM as MacOS Mach_O 32-bit.
+    // AOT compiled WASM as MacOS Mach_O 32-bit.
     MachO_32,
-    /// AOT compiled WASM as MacOS Mach_O 64-bit.
+    // AOT compiled WASM as MacOS Mach_O 64-bit.
     MachO_64,
-    /// AOT compiled WASM as Windows DLL.
+    // AOT compiled WASM as Windows DLL.
     DLL,
-    /// Unknown file header.
+    // Unknown file header.
     Unknown
   };
 

@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 #include "executor/executor.h"
 
 #include "common/errinfo.h"
 #include "common/log.h"
+
+#include <cstdint>
+#include <string_view>
+#include <utility>
 
 namespace WasmEdge {
 namespace Executor {
@@ -41,50 +46,46 @@ Expect<uint32_t> getImportAddr(std::string_view ModName,
                                std::string_view ExtName,
                                const ExternalType ExtType, ASTNodeAttr Node,
                                Runtime::Instance::ModuleInstance &ModInst) {
-  const auto &FuncList = ModInst.getFuncExports();
-  const auto &TabList = ModInst.getTableExports();
-  const auto &MemList = ModInst.getMemExports();
-  const auto &GlobList = ModInst.getGlobalExports();
-
   switch (ExtType) {
   case ExternalType::Function:
-    if (FuncList.find(ExtName) != FuncList.cend()) {
-      return FuncList.find(ExtName)->second;
+    if (auto Res = ModInst.findFuncExports(ExtName); likely(Res.has_value())) {
+      return *Res;
     }
     break;
   case ExternalType::Table:
-    if (TabList.find(ExtName) != TabList.cend()) {
-      return TabList.find(ExtName)->second;
+    if (auto Res = ModInst.findTableExports(ExtName); likely(Res.has_value())) {
+      return *Res;
     }
     break;
   case ExternalType::Memory:
-    if (MemList.find(ExtName) != MemList.cend()) {
-      return MemList.find(ExtName)->second;
+    if (auto Res = ModInst.findMemExports(ExtName); likely(Res.has_value())) {
+      return *Res;
     }
     break;
   case ExternalType::Global:
-    if (GlobList.find(ExtName) != GlobList.cend()) {
-      return GlobList.find(ExtName)->second;
+    if (auto Res = ModInst.findGlobalExports(ExtName);
+        likely(Res.has_value())) {
+      return *Res;
     }
     break;
   default:
     return logUnknownError(ModName, ExtName, ExtType, Node);
   }
 
-  /// Check is error external type or unknown imports.
-  if (FuncList.find(ExtName) != FuncList.cend()) {
+  // Check is error external type or unknown imports.
+  if (ModInst.findFuncExports(ExtName)) {
     return logMatchError(ModName, ExtName, ExtType, Node, ExtType,
                          ExternalType::Function);
   }
-  if (TabList.find(ExtName) != TabList.cend()) {
+  if (ModInst.findTableExports(ExtName)) {
     return logMatchError(ModName, ExtName, ExtType, Node, ExtType,
                          ExternalType::Table);
   }
-  if (MemList.find(ExtName) != MemList.cend()) {
+  if (ModInst.findMemExports(ExtName)) {
     return logMatchError(ModName, ExtName, ExtType, Node, ExtType,
                          ExternalType::Memory);
   }
-  if (GlobList.find(ExtName) != GlobList.cend()) {
+  if (ModInst.findGlobalExports(ExtName)) {
     return logMatchError(ModName, ExtName, ExtType, Node, ExtType,
                          ExternalType::Global);
   }
@@ -93,13 +94,14 @@ Expect<uint32_t> getImportAddr(std::string_view ModName,
 }
 } // namespace
 
-/// Instantiate imports. See "include/executor/executor.h".
+// Instantiate imports. See "include/executor/executor.h".
 Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
+                                   Runtime::StackManager &,
                                    Runtime::Instance::ModuleInstance &ModInst,
                                    const AST::ImportSection &ImportSec) {
-  /// Iterate and instantiate import descriptions.
+  // Iterate and instantiate import descriptions.
   for (const auto &ImpDesc : ImportSec.getContent()) {
-    /// Get data from import description and find import module.
+    // Get data from import description and find import module.
     auto ExtType = ImpDesc.getExternalType();
     auto ModName = ImpDesc.getModuleName();
     auto ExtName = ImpDesc.getExternalName();
@@ -115,17 +117,15 @@ Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
                                  ASTNodeAttr::Desc_Import, *TargetModInst)) {
       TargetAddr = *Res;
     } else {
-      spdlog::error(ErrInfo::InfoLinking(ModName, ExtName, ExtType));
-      spdlog::error(ErrInfo::InfoAST(ASTNodeAttr::Desc_Import));
       return Unexpect(Res);
     }
 
-    /// Add the imports into module istance.
+    // Add the imports into module istance.
     switch (ExtType) {
     case ExternalType::Function: {
-      /// Get function type index. External type checked in validation.
+      // Get function type index. External type checked in validation.
       uint32_t TypeIdx = ImpDesc.getExternalFuncTypeIdx();
-      /// Import matching.
+      // Import matching.
       const auto *TargetInst = *StoreMgr.getFunction(TargetAddr);
       const auto &TargetType = TargetInst->getFuncType();
       const auto *FuncType = *ModInst.getFuncType(TypeIdx);
@@ -135,15 +135,15 @@ Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
             FuncType->getParamTypes(), FuncType->getReturnTypes(),
             TargetType.getParamTypes(), TargetType.getReturnTypes());
       }
-      /// Set the matched function address to module instance.
+      // Set the matched function address to module instance.
       ModInst.importFunction(TargetAddr);
       break;
     }
     case ExternalType::Table: {
-      /// Get table type. External type checked in validation.
+      // Get table type. External type checked in validation.
       const auto &TabType = ImpDesc.getExternalTableType();
       const auto &TabLim = TabType.getLimit();
-      /// Import matching.
+      // Import matching.
       const auto *TargetInst = *StoreMgr.getTable(TargetAddr);
       const auto &TargetType = TargetInst->getTableType();
       const auto &TargetLim = TargetType.getLimit();
@@ -155,15 +155,15 @@ Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
                              TargetType.getRefType(), TargetLim.hasMax(),
                              TargetLim.getMin(), TargetLim.getMax());
       }
-      /// Set the matched table address to module instance.
+      // Set the matched table address to module instance.
       ModInst.importTable(TargetAddr);
       break;
     }
     case ExternalType::Memory: {
-      /// Get memory type. External type checked in validation.
+      // Get memory type. External type checked in validation.
       const auto &MemType = ImpDesc.getExternalMemoryType();
       const auto &MemLim = MemType.getLimit();
-      /// Import matching.
+      // Import matching.
       const auto *TargetInst = *StoreMgr.getMemory(TargetAddr);
       const auto &TargetLim = TargetInst->getMemoryType().getLimit();
       if (!isLimitMatched(TargetLim, MemLim)) {
@@ -172,14 +172,14 @@ Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
             MemLim.hasMax(), MemLim.getMin(), MemLim.getMax(),
             TargetLim.hasMax(), TargetLim.getMin(), TargetLim.getMax());
       }
-      /// Set the matched memory address to module instance.
+      // Set the matched memory address to module instance.
       ModInst.importMemory(TargetAddr);
       break;
     }
     case ExternalType::Global: {
-      /// Get global type. External type checked in validation.
+      // Get global type. External type checked in validation.
       const auto &GlobType = ImpDesc.getExternalGlobalType();
-      /// Import matching.
+      // Import matching.
       const auto *TargetInst = *StoreMgr.getGlobal(TargetAddr);
       const auto &TargetType = TargetInst->getGlobalType();
       if (TargetType != GlobType) {
@@ -188,7 +188,7 @@ Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
                              GlobType.getValMut(), TargetType.getValType(),
                              TargetType.getValMut());
       }
-      /// Set the matched global address to module instance.
+      // Set the matched global address to module instance.
       ModInst.importGlobal(TargetAddr);
       break;
     }

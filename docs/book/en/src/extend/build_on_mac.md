@@ -14,18 +14,17 @@ If you would like to develop WasmEdge on MacOS, please follow this guide to buil
 ## Get Source Code
 
 ```bash
-$ git clone https://github.com/WasmEdge/WasmEdge.git
-$ cd WasmEdge
+git clone https://github.com/WasmEdge/WasmEdge.git
+cd WasmEdge
 ```
 
 ## Requirements and Dependencies
 
-WasmEdge will try to use the latest LLVM release to create our nightly build. 
-If you want to build from source, you may need to install these dependencies 
-by yourself.
+WasmEdge will try to use the latest LLVM release to create our nightly build.
+If you want to build from source, you may need to install these dependencies by yourself.
 
-- LLVM 12.0.0 (>= 10.0.0), installed via brew, please don't use the built-in one.
-- Because the default version of LLVM on the latest brew is 13. Please use `llvm@12` to fix the LLVM version.
+* LLVM 12.0.0 (>= 10.0.0), installed via brew, please don't use the built-in one.
+* Because the default version of LLVM on the latest brew is 13. Please use `llvm@12` to fix the LLVM version.
 
 ### Prepare the environment
 
@@ -40,10 +39,10 @@ export CPPFLAGS="-I/usr/local/opt/llvm@12/include"
 
 ### If you don't want to build Ahead-of-Time runtime/compiler
 
-If users don't need Ahead-of-Time runtime/compiler support, they can set the CMake option `WASMEDGE_BUILD_AOT_RUNTIME` to `OFF`.
+If you don't need Ahead-of-Time runtime/compiler support, you can set the CMake option `WASMEDGE_BUILD_AOT_RUNTIME` to `OFF`.
 
 ```bash
-$ cmake -DCMAKE_BUILD_TYPE=Release -DWASMEDGE_BUILD_AOT_RUNTIME=OFF ..
+cmake -DCMAKE_BUILD_TYPE=Release -DWASMEDGE_BUILD_AOT_RUNTIME=OFF ..
 ```
 
 ## Build WasmEdge
@@ -52,15 +51,15 @@ WasmEdge provides various tools for enabling different runtime environments for 
 After the build is finished, you can find there are several wasmedge related tools:
 
 1. `wasmedge` is for general wasm runtime.
-	* `wasmedge` executes a `WASM` file in interpreter mode or a compiled WASM `dyld` file in ahead-of-time compilation mode.
-	* To disable building all tools, you can set the CMake option `WASMEDGE_BUILD_TOOLS` to `OFF`.
+   * `wasmedge` executes a `WASM` file in interpreter mode or a compiled WASM `dyld` file in ahead-of-time compilation mode.
+   * To disable building all tools, you can set the CMake option `WASMEDGE_BUILD_TOOLS` to `OFF`.
 2. `wasmedgec` is for ahead-of-time `WASM` compiler.
-	* `wasmedgec` compiles a general `WASM` file into a `dyld` file.
-	* To disable building the ahead-of-time compiler only, you can set the CMake option `WASMEDGE_BUILD_AOT_RUNTIME` to `OFF`.
+   * `wasmedgec` compiles a general `WASM` file into a `dyld` file.
+   * To disable building the ahead-of-time compiler only, you can set the CMake option `WASMEDGE_BUILD_AOT_RUNTIME` to `OFF`.
 3. `libwasmedge_c.dyld` is the WasmEdge C API shared library.
-	* `libwasmedge_c.dyld` provides C API for the ahead-of-time compiler and the WASM runtime.
-	* The APIs about the ahead-of-time compiler will always return failed if the CMake option `WASMEDGE_BUILD_AOT_RUNTIME` is set as `OFF`.
-	* To disable building the shared library only, you can set the CMake option `WASMEDGE_BUILD_SHARED_LIB` to `OFF`.
+   * `libwasmedge_c.dyld` provides C API for the ahead-of-time compiler and the WASM runtime.
+   * The APIs about the ahead-of-time compiler will always return failed if the CMake option `WASMEDGE_BUILD_AOT_RUNTIME` is set as `OFF`.
+   * To disable building the shared library only, you can set the CMake option `WASMEDGE_BUILD_SHARED_LIB` to `OFF`.
 
 ```bash
 cmake -Bbuild -GNinja -DWASMEDGE_BUILD_PACKAGE="TGZ" -DWASMEDGE_BUILD_TESTS=ON .
@@ -90,4 +89,3 @@ The following tests can not pass on macos, we are investigating these issues:
 * wasmedgeAPIStepsCoreTests
 * wasmedgeAPIAOTCoreTests
 * wasmedgeProcessTests
-

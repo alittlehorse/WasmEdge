@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 //===-- wasmedge/ast/module.h - Module class definition -------------------===//
 //
 // Part of the WasmEdge Project.
@@ -83,6 +85,7 @@ public:
     kTableInit,
     kElemDrop,
     kRefFunc,
+    kPtrFunc,
     kIntrinsicMax,
   };
   using IntrinsicsTable = void * [uint32_t(Intrinsics::kIntrinsicMax)];

@@ -1,6 +1,6 @@
 //! Defines WasmEdge Validator struct.
 
-use crate::{error::check, wasmedge, Config, Error, Module, WasmEdgeResult};
+use crate::{error::check, wasmedge, Config, Module, WasmEdgeError, WasmEdgeResult};
 
 /// Struct of WasmEdge Validator.
 #[derive(Debug)]
@@ -17,16 +17,17 @@ impl Validator {
     /// # Error
     ///
     /// If fail to create a [`Validator`], then an error is returned.
-    pub fn create(config: Option<&Config>) -> WasmEdgeResult<Self> {
-        let config_ctx = match config {
-            Some(config) => config.ctx,
-            None => std::ptr::null_mut(),
+    pub fn create(config: Option<Config>) -> WasmEdgeResult<Self> {
+        let ctx = match config {
+            Some(mut config) => {
+                let ctx = unsafe { wasmedge::WasmEdge_ValidatorCreate(config.ctx) };
+                config.ctx = std::ptr::null_mut();
+                ctx
+            }
+            None => unsafe { wasmedge::WasmEdge_ValidatorCreate(std::ptr::null_mut()) },
         };
-        let ctx = unsafe { wasmedge::WasmEdge_ValidatorCreate(config_ctx) };
         match ctx.is_null() {
-            true => Err(Error::OperationError(String::from(
-                "fail to create Validator instance",
-            ))),
+            true => Err(WasmEdgeError::CompilerCreate),
             false => Ok(Self { ctx }),
         }
     }
@@ -62,12 +63,16 @@ mod tests {
 
     #[test]
     fn test_validator() {
-        // create a Loader instance with configuration
+        // create a Validator context without configuration
+        let result = Validator::create(None);
+        assert!(result.is_ok());
+
+        // create a Loader context with configuration
         let result = Config::create();
         assert!(result.is_ok());
         let config = result.unwrap();
-        let config = config.enable_referencetypes(true);
-        let result = Loader::create(Some(&config));
+        let config = config.reference_types(true);
+        let result = Loader::create(Some(config));
         assert!(result.is_ok());
         let loader = result.unwrap();
 
@@ -79,7 +84,7 @@ mod tests {
         let module = result.unwrap();
         assert!(!module.ctx.is_null());
 
-        // create a Validator instance
+        // create a Validator context without configuration
         let result = Validator::create(None);
         assert!(result.is_ok());
         let validator = result.unwrap();

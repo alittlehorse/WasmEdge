@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2019-2022 Second State INC
+
 #include "common/defines.h"
 #if WASMEDGE_OS_MACOS
 
@@ -7,7 +9,14 @@
 #include "host/wasi/inode.h"
 #include "host/wasi/vfs.h"
 #include "macos.h"
-#include <netdb.h>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+#include <new>
+#include <string>
+#include <string_view>
+#include <vector>
 
 namespace WasmEdge {
 namespace Host {
@@ -80,6 +89,23 @@ constexpr int openFlags(__wasi_oflags_t OpenFlags, __wasi_fdflags_t FdFlags,
   return Flags;
 }
 
+std::pair<const char *, std::unique_ptr<char[]>>
+createNullTerminatedString(std::string_view View) noexcept {
+  const char *CStr = nullptr;
+  std::unique_ptr<char[]> Buffer;
+  if (!View.empty()) {
+    if (const auto Pos = View.find_first_of('\0');
+        Pos != std::string_view::npos) {
+      CStr = View.data();
+    } else {
+      Buffer = std::make_unique<char[]>(View.size() + 1);
+      std::copy(View.begin(), View.end(), Buffer.get());
+      CStr = Buffer.get();
+    }
+  }
+  return {CStr, std::move(Buffer)};
+}
+
 } // namespace
 
 void FdHolder::reset() noexcept {
@@ -119,7 +145,7 @@ WasiExpect<INode> INode::open(std::string Path, __wasi_oflags_t OpenFlags,
 
 WasiExpect<void> INode::fdAdvise(__wasi_filesize_t, __wasi_filesize_t,
                                  __wasi_advice_t) const noexcept {
-  /// Not supported, just ignore it.
+  // Not supported, just ignore it.
   return {};
 }
 
@@ -138,15 +164,15 @@ WasiExpect<void> INode::fdAllocate(__wasi_filesize_t Offset,
   }
   if (Len <= static_cast<__wasi_filesize_t>(EofOffset) &&
       Offset <= static_cast<__wasi_filesize_t>(EofOffset) - Len) {
-    /// File is already large enough.
+    // File is already large enough.
     return {};
   }
 
-  /// Try to allocate contiguous space.
+  // Try to allocate contiguous space.
   fstore_t Store = {F_ALLOCATECONTIG, F_PEOFPOSMODE, 0,
                     static_cast<int64_t>(Len), 0};
   if (auto Res = ::fcntl(Fd, F_PREALLOCATE, &Store); unlikely(Res < 0)) {
-    /// Try to allocate sparse space.
+    // Try to allocate sparse space.
     Store.fst_flags = F_ALLOCATEALL;
     if (auto Res = ::fcntl(Fd, F_PREALLOCATE, &Store); unlikely(Res < 0)) {
       return WasiUnexpect(fromErrNo(errno));
@@ -871,7 +897,7 @@ WasiExpect<void> INode::sockRecv(Span<Span<uint8_t>> RiData,
   SysMsgHdr.msg_controllen = 0;
   SysMsgHdr.msg_flags = 0;
 
-  /// Store recv bytes length and flags.
+  // Store recv bytes length and flags.
   if (auto Res = ::recvmsg(Fd, &SysMsgHdr, SysRiFlags); unlikely(Res < 0)) {
     return WasiUnexpect(fromErrNo(errno));
   } else {
@@ -907,7 +933,7 @@ WasiExpect<void> INode::sockSend(Span<Span<const uint8_t>> SiData,
   SysMsgHdr.msg_control = nullptr;
   SysMsgHdr.msg_controllen = 0;
 
-  /// Store recv bytes length and flags.
+  // Store recv bytes length and flags.
   if (auto Res = ::sendmsg(Fd, &SysMsgHdr, SysSiFlags); unlikely(Res < 0)) {
     return WasiUnexpect(fromErrNo(errno));
   } else {
@@ -932,6 +958,28 @@ WasiExpect<void> INode::sockShutdown(__wasi_sdflags_t SdFlags) const noexcept {
   }
 
   return {};
+}
+
+WasiExpect<void> INode::sockGetOpt(__wasi_sock_opt_level_t,
+                                   __wasi_sock_opt_so_t, void *,
+                                   uint32_t *) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockSetOpt(__wasi_sock_opt_level_t,
+                                   __wasi_sock_opt_so_t, void *,
+                                   uint32_t) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockGetLoaclAddr(uint8_t *, uint32_t *,
+                                         uint32_t *) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
+}
+
+WasiExpect<void> INode::sockGetPeerAddr(uint8_t *, uint32_t *,
+                                        uint32_t *) const noexcept {
+  return WasiUnexpect(__WASI_ERRNO_NOSYS);
 }
 
 __wasi_filetype_t INode::unsafeFiletype() const noexcept {
@@ -1122,7 +1170,8 @@ WasiExpect<void> Poller::wait(CallbackType Callback) noexcept {
   return {};
 }
 
-WasiExpect<void> INode::getAddrinfo(const char *NodeStr, const char *ServiceStr,
+WasiExpect<void> INode::getAddrinfo(std::string_view Node,
+                                    std::string_view Service,
                                     const __wasi_addrinfo_t &Hint,
                                     uint32_t MaxResLength,
                                     Span<__wasi_addrinfo_t *> WasiAddrinfoArray,
@@ -1130,6 +1179,9 @@ WasiExpect<void> INode::getAddrinfo(const char *NodeStr, const char *ServiceStr,
                                     Span<char *> AiAddrSaDataArray,
                                     Span<char *> AiCanonnameArray,
                                     /*Out*/ __wasi_size_t &ResLength) noexcept {
+  const auto [NodeCStr, NodeBuf] = createNullTerminatedString(Node);
+  const auto [ServiceCStr, ServiceBuf] = createNullTerminatedString(Service);
+
   struct addrinfo SysHint;
   SysHint.ai_flags = Hint.ai_flags;
   SysHint.ai_family = Hint.ai_family;
@@ -1141,7 +1193,7 @@ WasiExpect<void> INode::getAddrinfo(const char *NodeStr, const char *ServiceStr,
   SysHint.ai_next = nullptr;
 
   struct addrinfo *SysResPtr = nullptr;
-  if (auto Res = ::getaddrinfo(NodeStr, ServiceStr, &SysHint, &SysResPtr);
+  if (auto Res = ::getaddrinfo(NodeCStr, ServiceCStr, &SysHint, &SysResPtr);
       unlikely(Res < 0)) {
     return WasiUnexpect(fromEAIErrNo(Res));
   }
