@@ -18,13 +18,13 @@ Expect<void> FileMgr::setPath(const std::filesystem::path &FilePath) {
   if (likely(!ErrCode)) {
     if (!MMap::supported()) {
       Size = 0;
-      Status = ErrCode::IllegalPath;
+      Status = ErrCode::Value::IllegalPath;
       return Unexpect(Status);
     }
     FileMap.emplace(FilePath);
     if (auto *Pointer = FileMap->address(); likely(Pointer)) {
       Data = reinterpret_cast<const Byte *>(Pointer);
-      Status = ErrCode::Success;
+      Status = ErrCode::Value::Success;
     } else {
       // File size is 0, mmap failed.
       // Will get 'UnexpectedEnd' error while the first reading.
@@ -33,7 +33,7 @@ Expect<void> FileMgr::setPath(const std::filesystem::path &FilePath) {
     return {};
   }
   Size = 0;
-  Status = ErrCode::IllegalPath;
+  Status = ErrCode::Value::IllegalPath;
   return Unexpect(Status);
 }
 
@@ -42,7 +42,7 @@ Expect<void> FileMgr::setCode(Span<const Byte> CodeData) {
   reset();
   Data = CodeData.data();
   Size = CodeData.size();
-  Status = ErrCode::Success;
+  Status = ErrCode::Value::Success;
   return {};
 }
 
@@ -52,13 +52,13 @@ Expect<void> FileMgr::setCode(std::vector<Byte> CodeData) {
   DataHolder.emplace(std::move(CodeData));
   Data = DataHolder->data();
   Size = DataHolder->size();
-  Status = ErrCode::Success;
+  Status = ErrCode::Value::Success;
   return {};
 }
 
 // Read one byte. See "include/loader/filemgr.h".
 Expect<Byte> FileMgr::readByte() {
-  if (unlikely(Status != ErrCode::Success)) {
+  if (unlikely(Status != ErrCode::Value::Success)) {
     return Unexpect(Status);
   }
   // Set the flag to the start offset.
@@ -84,7 +84,7 @@ Expect<std::vector<Byte>> FileMgr::readBytes(size_t SizeToRead) {
 
 // Decode and read an unsigned int. See "include/loader/filemgr.h".
 Expect<uint32_t> FileMgr::readU32() {
-  if (unlikely(Status != ErrCode::Success)) {
+  if (unlikely(Status != ErrCode::Value::Success)) {
     return Unexpect(Status);
   }
   // Set the flag to the start offset.
@@ -96,36 +96,26 @@ Expect<uint32_t> FileMgr::readU32() {
   Byte Byte = 0x80;
   while (Byte & 0x80) {
     if (unlikely(Offset >= 32)) {
-      Status = ErrCode::IntegerTooLong;
+      Status = ErrCode::Value::IntegerTooLong;
       return Unexpect(Status);
     }
-    // Only check the data boundary here. The section boundary will check after
-    // reading succeeded.
-    if (unlikely(Pos >= Size)) {
-      LastPos = Pos;
-      Status = ErrCode::UnexpectedEnd;
-      return Unexpect(Status);
+    if (auto Res = testRead(1); unlikely(!Res)) {
+      return Unexpect(Res);
     }
     Byte = Data[Pos++];
     Result |= (Byte & UINT32_C(0x7F)) << Offset;
     if (Offset == 28 && unlikely((Byte & UINT32_C(0x70)) != 0)) {
-      Status = ErrCode::IntegerTooLarge;
+      Status = ErrCode::Value::IntegerTooLarge;
       return Unexpect(Status);
     }
     Offset += 7;
-  }
-  // Check if the variable length exceed the set section boundary.
-  if (SecPos.has_value() && unlikely(Pos > SecPos.value())) {
-    LastPos = SecPos.value();
-    Status = ErrCode::UnexpectedEnd;
-    return Unexpect(Status);
   }
   return Result;
 }
 
 // Decode and read an unsigned long long int. See "include/loader/filemgr.h".
 Expect<uint64_t> FileMgr::readU64() {
-  if (Status != ErrCode::Success) {
+  if (Status != ErrCode::Value::Success) {
     return Unexpect(Status);
   }
   // Set the flag to the start offset.
@@ -137,134 +127,111 @@ Expect<uint64_t> FileMgr::readU64() {
   Byte Byte = 0x80;
   while (Byte & 0x80) {
     if (unlikely(Offset >= 64)) {
-      Status = ErrCode::IntegerTooLong;
+      Status = ErrCode::Value::IntegerTooLong;
       return Unexpect(Status);
     }
-    // Only check the data boundary here. The section boundary will check after
-    // reading succeeded.
-    if (unlikely(Pos >= Size)) {
-      LastPos = Pos;
-      Status = ErrCode::UnexpectedEnd;
-      return Unexpect(Status);
+    if (auto Res = testRead(1); unlikely(!Res)) {
+      return Unexpect(Res);
     }
     Byte = Data[Pos++];
     Result |= (Byte & UINT64_C(0x7F)) << Offset;
     if (Offset == 63 && unlikely((Byte & UINT32_C(0x7E)) != 0)) {
-      Status = ErrCode::IntegerTooLarge;
+      Status = ErrCode::Value::IntegerTooLarge;
       return Unexpect(Status);
     }
     Offset += 7;
   }
-  // Check if the variable length exceed the set section boundary.
-  if (SecPos.has_value() && unlikely(Pos > SecPos.value())) {
-    LastPos = SecPos.value();
-    Status = ErrCode::UnexpectedEnd;
-    return Unexpect(Status);
-  }
   return Result;
 }
+
+template <typename RetType, size_t N> Expect<RetType> FileMgr::readSN() {
+  static_assert(N >= 8, "The N of S_N must have at least length of a byte");
+  static_assert(8 * sizeof(RetType) >= N,
+                "RetType cannot hold the full range of S_N");
+  static_assert(std::is_signed_v<RetType>,
+                "RetType of S_N must be signed type");
+
+  if (Status != ErrCode::Value::Success) {
+    return Unexpect(Status);
+  }
+  // Set the flag to the start offset.
+  LastPos = Pos;
+
+  // Read and decode S_N.
+  RetType Result = 0;
+  size_t Offset = 0;
+  size_t RemainingBits = N;
+  while (true) {
+    if (RemainingBits <= 0) {
+      Status = ErrCode::Value::IntegerTooLong;
+      return Unexpect(Status);
+    }
+
+    // In the rest logic, RemainingBits must be at least 1.
+    WasmEdge::Byte Byte;
+    if (auto Res = testRead(1); unlikely(!Res)) {
+      return Unexpect(Res);
+    } else {
+      Byte = Data[Pos++];
+    }
+
+    const WasmEdge::Byte HighestBitMask = 1 << 7;
+    const WasmEdge::Byte SecondHighestBitMask = 1 << 6;
+    if (Byte & HighestBitMask) {
+      // The byte has leading 1. It contains 7 bits payload.
+
+      if (unlikely(RemainingBits < 7)) {
+        Status = ErrCode::Value::IntegerTooLong;
+        return Unexpect(Status);
+      }
+
+      std::make_unsigned_t<RetType> Payload =
+          Byte & (~HighestBitMask); // & 0b01111111
+      Result |= (Payload << Offset);
+      Offset += 7;
+      RemainingBits -= 7;
+    } else {
+      // The byte has leading 0. It will be the last byte.
+
+      // The number of bits that take effect in the byte. Since RemainingBits
+      // must be at least 1, EffectiveBits also must be at least 1. It is also
+      // at most 7.
+      size_t EffectiveBits = RemainingBits < 7 ? RemainingBits : 7;
+      std::make_unsigned_t<RetType> Payload = Byte;
+      if (Byte & SecondHighestBitMask) {
+        // The byte is signed.
+        if (Byte >= (1 << 7) - (1 << (EffectiveBits - 1))) {
+          Payload -= (1 << 7);
+        } else {
+          Status = ErrCode::Value::IntegerTooLarge;
+          return Unexpect(Status);
+        }
+      } else {
+        // The byte is unsigned.
+        if (Byte >= (1 << (EffectiveBits - 1))) {
+          Status = ErrCode::Value::IntegerTooLarge;
+          return Unexpect(Status);
+        }
+      }
+      Result |= (Payload << Offset);
+      break;
+    }
+  }
+
+  return Result;
+}
+
+Expect<int64_t> FileMgr::readS33() { return readSN<int64_t, 33>(); }
 
 // Decode and read a signed int. See "include/loader/filemgr.h".
-Expect<int32_t> FileMgr::readS32() {
-  if (Status != ErrCode::Success) {
-    return Unexpect(Status);
-  }
-  // Set the flag to the start offset.
-  LastPos = Pos;
-
-  // Read and decode S32.
-  int32_t Result = 0;
-  uint32_t Offset = 0;
-  Byte Byte = 0x80;
-  while (Byte & 0x80) {
-    if (unlikely(Offset >= 32)) {
-      Status = ErrCode::IntegerTooLong;
-      return Unexpect(Status);
-    }
-    // Only check the data boundary here. The section boundary will check after
-    // reading succeeded.
-    if (unlikely(Pos >= Size)) {
-      LastPos = Pos;
-      Status = ErrCode::UnexpectedEnd;
-      return Unexpect(Status);
-    }
-    Byte = Data[Pos++];
-    const int32_t Mask = Offset == 28 ? INT32_C(0x0F) : INT32_C(0x7F);
-    Result |= (Byte & Mask) << Offset;
-    Offset += 7;
-  }
-  if (Offset == 35) {
-    // The signed-extend bits should be the same.
-    if (unlikely(((Byte & 0x70) != 0x70 && (Byte & 0x70) != 0) ||
-                 (Byte & 0x40) >> 6 != (Byte & 0x08) >> 3)) {
-      Status = ErrCode::IntegerTooLarge;
-      return Unexpect(Status);
-    }
-  }
-  if (Byte & 0x40 && Offset < 32) {
-    Result |= static_cast<int32_t>(UINT32_C(0xFFFFFFFF) << Offset);
-  }
-  // Check if the variable length exceed the set section boundary.
-  if (SecPos.has_value() && unlikely(Pos > SecPos.value())) {
-    LastPos = SecPos.value();
-    Status = ErrCode::UnexpectedEnd;
-    return Unexpect(Status);
-  }
-  return Result;
-}
+Expect<int32_t> FileMgr::readS32() { return readSN<int32_t, 32>(); }
 
 // Decode and read a signed long long int. See "include/loader/filemgr.h".
-Expect<int64_t> FileMgr::readS64() {
-  if (Status != ErrCode::Success) {
-    return Unexpect(Status);
-  }
-  // Set the flag to the start offset.
-  LastPos = Pos;
-
-  // Read and decode S64.
-  int64_t Result = 0;
-  uint64_t Offset = 0;
-  Byte Byte = 0x80;
-  while (Byte & 0x80) {
-    if (unlikely(Offset >= 64)) {
-      Status = ErrCode::IntegerTooLong;
-      return Unexpect(Status);
-    }
-    // Only check the data boundary here. The section boundary will check after
-    // reading succeeded.
-    if (unlikely(Pos >= Size)) {
-      LastPos = Pos;
-      Status = ErrCode::UnexpectedEnd;
-      return Unexpect(Status);
-    }
-    Byte = Data[Pos++];
-    const int64_t Mask = Offset == 63 ? INT64_C(0x01) : INT64_C(0x7F);
-    Result |= (Byte & Mask) << Offset;
-    Offset += 7;
-  }
-  if (Offset == 70) {
-    // The signed-extend bits should be the same.
-    if (unlikely(((Byte & 0x7E) != 0x7E && (Byte & 0x7E) != 0) ||
-                 (Byte & 0x40) >> 6 != (Byte & 0x01))) {
-      Status = ErrCode::IntegerTooLarge;
-      return Unexpect(Status);
-    }
-  }
-  if (Byte & 0x40 && Offset < 64) {
-    Result |= static_cast<int64_t>(UINT64_C(0xFFFFFFFFFFFFFFFF) << Offset);
-  }
-  // Check if the variable length exceed the set section boundary.
-  if (SecPos.has_value() && unlikely(Pos > SecPos.value())) {
-    LastPos = SecPos.value();
-    Status = ErrCode::UnexpectedEnd;
-    return Unexpect(Status);
-  }
-  return Result;
-}
+Expect<int64_t> FileMgr::readS64() { return readSN<int64_t, 64>(); }
 
 // Copy bytes to a float. See "include/loader/filemgr.h".
 Expect<float> FileMgr::readF32() {
-  if (Status != ErrCode::Success) {
+  if (Status != ErrCode::Value::Success) {
     return Unexpect(Status);
   }
   // Set the flag to the start offset.
@@ -288,7 +255,7 @@ Expect<float> FileMgr::readF32() {
 
 // Copy bytes to a double. See "include/loader/filemgr.h".
 Expect<double> FileMgr::readF64() {
-  if (Status != ErrCode::Success) {
+  if (Status != ErrCode::Value::Success) {
     return Unexpect(Status);
   }
   // Set the flag to the start offset.
@@ -312,7 +279,7 @@ Expect<double> FileMgr::readF64() {
 
 // Read a vector of bytes. See "include/loader/filemgr.h".
 Expect<std::string> FileMgr::readName() {
-  if (unlikely(Status != ErrCode::Success)) {
+  if (unlikely(Status != ErrCode::Value::Success)) {
     return Unexpect(Status);
   }
   // If UTF-8 validation or readU32() or readBytes() failed, the last succeeded
@@ -327,9 +294,9 @@ Expect<std::string> FileMgr::readName() {
     SizeToRead = *Res;
   }
 
-  // Check if string length exceed the data boundary or the section boundary.
+  // Check if string length exceed the data boundary.
   if (auto Res = testRead(SizeToRead); unlikely(!Res)) {
-    return Unexpect(ErrCode::NameSizeOutOfBounds);
+    return Unexpect(ErrCode::Value::LengthOutOfBounds);
   }
 
   // Read the UTF-8 bytes.
@@ -397,10 +364,20 @@ Expect<std::string> FileMgr::readName() {
   }
 
   if (!Valid) {
-    Status = ErrCode::MalformedUTF8;
+    Status = ErrCode::Value::MalformedUTF8;
     return Unexpect(Status);
   }
   return Str;
+}
+
+// Peek one byte. See "include/loader/filemgr.h".
+Expect<Byte> FileMgr::peekByte() {
+  if (auto Res = readByte()) {
+    Pos--;
+    return Res;
+  } else {
+    return Unexpect(Res);
+  }
 }
 
 // Get the file header type. See "include/loader/filemgr.h".
@@ -429,15 +406,37 @@ FileMgr::FileHeader FileMgr::getHeaderType() {
   return FileMgr::FileHeader::Unknown;
 }
 
+// Jump a section. See "include/loader/filemgr.h".
+Expect<void> FileMgr::jumpContent() {
+  if (unlikely(Status != ErrCode::Value::Success)) {
+    return Unexpect(Status);
+  }
+  // Set the flag to the start offset.
+  LastPos = Pos;
+  // Read the section size.
+  uint32_t SecSize = 0;
+  if (auto Res = readU32()) {
+    SecSize = *Res;
+  } else {
+    return Unexpect(Res);
+  }
+  // Jump the content.
+  if (auto Res = testRead(SecSize); unlikely(!Res)) {
+    return Unexpect(ErrCode::Value::LengthOutOfBounds);
+  }
+  Pos += SecSize;
+  return {};
+}
+
 // Helper function for reading number of bytes. See "include/loader/filemgr.h".
 Expect<void> FileMgr::readBytes(Span<Byte> Buffer) {
-  if (unlikely(Status != ErrCode::Success)) {
+  if (unlikely(Status != ErrCode::Value::Success)) {
     return Unexpect(Status);
   }
   // The adjustment of `LastPos` should be handled by caller.
   auto SizeToRead = Buffer.size();
   if (likely(SizeToRead > 0)) {
-    // Check if exceed the data boundary and section boundary.
+    // Check if exceed the data boundary.
     if (auto Res = testRead(SizeToRead); unlikely(!Res)) {
       return Unexpect(Res);
     }
@@ -449,18 +448,11 @@ Expect<void> FileMgr::readBytes(Span<Byte> Buffer) {
 
 // Helper function for checking boundary. See "include/loader/filemgr.h".
 Expect<void> FileMgr::testRead(uint64_t Read) {
-  // Check if exceed the set section boundary first
-  if (SecPos.has_value() && unlikely(SecPos.value() - Pos < Read)) {
-    Pos = SecPos.value();
-    LastPos = Pos;
-    Status = ErrCode::UnexpectedEnd;
-    return Unexpect(Status);
-  }
   // Check if exceed the data boundary
-  if (unlikely(Size - Pos < Read)) {
+  if (unlikely(getRemainSize() < Read)) {
     Pos = Size;
     LastPos = Pos;
-    Status = ErrCode::UnexpectedEnd;
+    Status = ErrCode::Value::UnexpectedEnd;
     return Unexpect(Status);
   }
   return {};

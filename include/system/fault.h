@@ -15,7 +15,6 @@
 #pragma once
 
 #include "common/errcode.h"
-
 #include <csetjmp>
 
 namespace WasmEdge {
@@ -37,4 +36,4 @@ private:
 
 } // namespace WasmEdge
 
-#define PREPARE_FAULT(f) (static_cast<ErrCode>(setjmp((f).buffer())))
+#define PREPARE_FAULT(f) (static_cast<uint32_t>(setjmp((f).buffer())))

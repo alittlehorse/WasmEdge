@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: 2019-2022 Second State INC
 
-cmake_minimum_required(VERSION 3.9.4)
+cmake_minimum_required(VERSION 3.10.2)
 cmake_policy(SET CMP0091 NEW)
 
 option(WASMEDGE_BUILD_ON_OHOS "Cross compiler WasmEdge on OpenHarmony." OFF)
@@ -66,32 +66,15 @@ set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Filesystem REQUIRED Final Experimental)
 find_package(Threads REQUIRED)
 
-find_package(Boost QUIET)
-if(${Boost_FOUND})
-else()
-  FetchContent_Declare(
-    Boost
-    URL https://boostorg.jfrog.io/artifactory/main/release/1.76.0/source/boost_1_76_0.tar.bz2
-    URL_HASH SHA256=f0397ba6e982c4450f27bf32a2a83292aba035b827a5623a14636ea583318c41
-  )
-  set(BOOST_ENABLE_CMAKE ON)
-  set(BOOST_RUNTIME_LINK static)
-  set(BUILD_TESTING OFF)
-  FetchContent_MakeAvailable(Boost)
-  add_library(Boost_boost INTERFACE)
-  add_library(Boost::boost ALIAS Boost_boost)
-  target_include_directories(Boost_boost INTERFACE ${boost_SOURCE_DIR})
-endif()
-
 include(Helper)
 
 # List of WasmEdge options
 option(WASMEDGE_BUILD_TESTS "Generate build targets for the wasmedge unit tests." OFF)
 option(WASMEDGE_BUILD_COVERAGE "Generate coverage report. Require WASMEDGE_BUILD_TESTS." OFF)
-option(WASMEDGE_BUILD_AOT_RUNTIME "Enable WasmEdge LLVM-based ahead of time compilation runtime." ON)
 option(WASMEDGE_BUILD_SHARED_LIB "Generate the WasmEdge shared library." ON)
 option(WASMEDGE_BUILD_STATIC_LIB "Generate the WasmEdge static library." OFF)
 option(WASMEDGE_BUILD_TOOLS "Generate wasmedge and wasmedgec tools." ON)
+option(WASMEDGE_USE_LLVM "Enable WasmEdge LLVM-based ahead of time compilation runtime." ON)
 option(WASMEDGE_FORCE_DISABLE_LTO "Forcibly disable link time optimization when linking even in Release/RelWithDeb build." OFF)
 set(WASMEDGE_BUILD_PACKAGE "DEB;RPM" CACHE STRING "Package generate types")
 set(CPACK_PROJECT_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/cpack_config.cmake)

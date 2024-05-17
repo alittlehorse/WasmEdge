@@ -42,38 +42,38 @@ TypeFI<TIn, TOut> Executor::runTruncateOp(const AST::Instruction &Instr,
   TIn Z = Val.get<TIn>();
   // If z is a NaN or an infinity, then the result is undefined.
   if (std::isnan(Z)) {
-    spdlog::error(ErrCode::InvalidConvToInt);
+    spdlog::error(ErrCode::Value::InvalidConvToInt);
     spdlog::error(ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset(),
                                            {Val}, {ValTypeFromType<TIn>()}));
-    return Unexpect(ErrCode::InvalidConvToInt);
+    return Unexpect(ErrCode::Value::InvalidConvToInt);
   }
   if (std::isinf(Z)) {
-    spdlog::error(ErrCode::IntegerOverflow);
+    spdlog::error(ErrCode::Value::IntegerOverflow);
     spdlog::error(ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset(),
                                            {Val}, {ValTypeFromType<TIn>()}));
-    return Unexpect(ErrCode::IntegerOverflow);
+    return Unexpect(ErrCode::Value::IntegerOverflow);
   }
   // If trunc(z) is out of range of target type, then the result is undefined.
   Z = std::trunc(Z);
   TIn ValTOutMin = static_cast<TIn>(std::numeric_limits<TOut>::min());
   TIn ValTOutMax = static_cast<TIn>(std::numeric_limits<TOut>::max());
-  if (sizeof(TIn) > sizeof(TOut)) {
+  if constexpr (sizeof(TIn) > sizeof(TOut)) {
     // Floating precision is better than integer case.
     if (Z < ValTOutMin || Z > ValTOutMax) {
-      spdlog::error(ErrCode::IntegerOverflow);
+      spdlog::error(ErrCode::Value::IntegerOverflow);
       spdlog::error(ErrInfo::InfoInstruction(Instr.getOpCode(),
                                              Instr.getOffset(), {Val},
                                              {ValTypeFromType<TIn>()}));
-      return Unexpect(ErrCode::IntegerOverflow);
+      return Unexpect(ErrCode::Value::IntegerOverflow);
     }
   } else {
     // Floating precision is worse than integer case.
     if (Z < ValTOutMin || Z >= ValTOutMax) {
-      spdlog::error(ErrCode::IntegerOverflow);
+      spdlog::error(ErrCode::Value::IntegerOverflow);
       spdlog::error(ErrInfo::InfoInstruction(Instr.getOpCode(),
                                              Instr.getOffset(), {Val},
                                              {ValTypeFromType<TIn>()}));
-      return Unexpect(ErrCode::IntegerOverflow);
+      return Unexpect(ErrCode::Value::IntegerOverflow);
     }
   }
   // Else, return trunc(z). Signed case handled.
@@ -99,7 +99,7 @@ TypeFI<TIn, TOut> Executor::runTruncateSatOp(ValVariant &Val) const {
     Z = std::trunc(Z);
     TIn ValTOutMin = static_cast<TIn>(std::numeric_limits<TOut>::min());
     TIn ValTOutMax = static_cast<TIn>(std::numeric_limits<TOut>::max());
-    if (sizeof(TIn) > sizeof(TOut)) {
+    if constexpr (sizeof(TIn) > sizeof(TOut)) {
       // Floating precision is better than integer case.
       if (Z < ValTOutMin) {
         Val.emplace<TOut>(std::numeric_limits<TOut>::min());
@@ -125,7 +125,7 @@ TypeFI<TIn, TOut> Executor::runTruncateSatOp(ValVariant &Val) const {
 template <typename TIn, typename TOut, size_t B>
 TypeIU<TIn, TOut> Executor::runExtendOp(ValVariant &Val) const {
   // Return i extend to TOut. Signed case handled.
-  if (B == sizeof(TIn) * 8) {
+  if constexpr (B == sizeof(TIn) * 8) {
     Val.emplace<TOut>(static_cast<TOut>(Val.get<TIn>()));
   } else {
     Val.emplace<TOut>(

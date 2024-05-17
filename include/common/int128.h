@@ -13,21 +13,34 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 
-#if defined(__x86_64__) || defined(__aarch64__)
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma intrinsic(_BitScanReverse64)
+#endif
+
+#include <ostream>
+
+// If there is a built-in type __int128, then use it directly
+#if defined(__x86_64__) || defined(__aarch64__) ||                             \
+    (defined(__riscv) && __riscv_xlen == 64)
 
 namespace WasmEdge {
 using int128_t = __int128;
 using uint128_t = unsigned __int128;
+std::ostream &operator<<(std::ostream &OS, uint128_t Value);
 } // namespace WasmEdge
 
 #else
 
-#include <boost/predef/other/endian.h>
+// We have to detect for those environments who don't support __int128 type
+// natively.
+#include "endian.h"
+
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 
-#if !BOOST_ENDIAN_LITTLE_BYTE
+// Currently, only byte-swapped little endian is handled.
+#if !WASMEDGE_ENDIAN_LITTLE_BYTE
 #error unsupported endian!
 #endif
 
@@ -38,7 +51,7 @@ class uint128_t;
 
 class uint128_t {
 public:
-  constexpr uint128_t() noexcept = default;
+  uint128_t() noexcept = default;
   constexpr uint128_t(const uint128_t &) noexcept = default;
   constexpr uint128_t(uint128_t &&) noexcept = default;
   constexpr uint128_t &operator=(const uint128_t &V) noexcept = default;
@@ -177,7 +190,7 @@ public:
     }
     uint128_t Denominator = RHS;
     uint128_t Quotient = 0;
-    const unsigned int Shift = LHS.clz() - RHS.clz();
+    const unsigned int Shift = RHS.clz() - LHS.clz();
     Denominator <<= Shift;
     for (unsigned int I = 0; I <= Shift; ++I) {
       Quotient <<= 1U;
@@ -197,18 +210,15 @@ public:
       return 0;
     }
     uint128_t Denominator = RHS;
-    uint128_t Quotient = 0;
-    const unsigned int Shift = LHS.clz() - RHS.clz();
+    const unsigned int Shift = RHS.clz() - LHS.clz();
     Denominator <<= Shift;
     for (unsigned int I = 0; I <= Shift; ++I) {
-      Quotient <<= 1U;
       if (LHS >= Denominator) {
         LHS -= Denominator;
-        Quotient |= 1U;
       }
       Denominator >>= 1U;
     }
-    return Denominator;
+    return LHS;
   }
   friend constexpr uint128_t operator&(uint128_t LHS, uint128_t RHS) noexcept {
     return uint128_t(LHS.High & RHS.High, LHS.Low & RHS.Low);
@@ -218,6 +228,9 @@ public:
   }
   friend constexpr uint128_t operator^(uint128_t LHS, uint128_t RHS) noexcept {
     return uint128_t(LHS.High ^ RHS.High, LHS.Low ^ RHS.Low);
+  }
+  friend constexpr uint128_t operator~(uint128_t Value) noexcept {
+    return uint128_t(~Value.High, ~Value.Low);
   }
   friend constexpr uint128_t operator<<(uint128_t Value,
                                         unsigned int Shift) noexcept {
@@ -235,7 +248,7 @@ public:
     if (Shift < 64) {
       if (Shift != 0) {
         return uint128_t((Value.High >> Shift),
-                         Value.Low >> Shift | (Value.Low << (64 - Shift)));
+                         Value.Low >> Shift | (Value.High << (64 - Shift)));
       }
       return Value;
     }
@@ -245,6 +258,14 @@ public:
     return Value << static_cast<unsigned int>(Shift);
   }
   friend constexpr uint128_t operator>>(uint128_t Value, int Shift) noexcept {
+    return Value >> static_cast<unsigned int>(Shift);
+  }
+  friend constexpr uint128_t operator<<(uint128_t Value,
+                                        unsigned long long Shift) noexcept {
+    return Value << static_cast<unsigned int>(Shift);
+  }
+  friend constexpr uint128_t operator>>(uint128_t Value,
+                                        unsigned long long Shift) noexcept {
     return Value >> static_cast<unsigned int>(Shift);
   }
 
@@ -260,6 +281,18 @@ public:
   constexpr uint64_t low() const noexcept { return Low; }
   constexpr uint64_t high() const noexcept { return High; }
   constexpr unsigned int clz() const noexcept {
+#if defined(_MSC_VER) && !defined(__clang__)
+    unsigned long LeadingZero = 0;
+    if (High) {
+      _BitScanReverse64(&LeadingZero, High);
+      return (63 - LeadingZero);
+    }
+    if (Low) {
+      _BitScanReverse64(&LeadingZero, Low);
+      return (63 - LeadingZero) + 64;
+    }
+    return 128;
+#else
     if (High) {
       return __builtin_clzll(High);
     }
@@ -267,16 +300,17 @@ public:
       return __builtin_clzll(Low) + 64;
     }
     return 128;
+#endif
   }
 
 private:
-  uint64_t Low = 0;
-  uint64_t High = 0;
+  uint64_t Low;
+  uint64_t High;
 };
 
 class int128_t {
 public:
-  constexpr int128_t() noexcept = default;
+  int128_t() noexcept = default;
   constexpr int128_t(const int128_t &) noexcept = default;
   constexpr int128_t(int128_t &&) noexcept = default;
   constexpr int128_t &operator=(const int128_t &V) noexcept = default;
@@ -324,8 +358,8 @@ public:
   constexpr int64_t high() const noexcept { return High; }
 
 private:
-  uint64_t Low = 0;
-  int64_t High = 0;
+  uint64_t Low;
+  int64_t High;
 };
 
 inline constexpr uint128_t::uint128_t(int128_t V) noexcept
@@ -342,6 +376,7 @@ inline constexpr int128_t &int128_t::operator=(uint128_t V) noexcept {
   return *this = int128_t(V);
 }
 
+std::ostream &operator<<(std::ostream &OS, uint128_t Value);
 } // namespace WasmEdge
 
 namespace std {

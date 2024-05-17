@@ -9,9 +9,20 @@ target_link_libraries(wasmedgeVM
   PUBLIC
   wasmedgeCommon
   wasmedgeSystem
+  wasmedgePlugin
   wasmedgeLoader
   wasmedgeValidator
   wasmedgeExecutor
   wasmedgeHostModuleWasi
-  wasmedgeHostModuleWasmEdgeProcess
 )
+
+if(WASMEDGE_USE_LLVM)
+  target_compile_definitions(wasmedgeVM
+    PUBLIC
+    -DWASMEDGE_USE_LLVM
+  )
+  target_link_libraries(wasmedgeVM
+    PUBLIC
+    wasmedgeLLVM
+  )
+endif()

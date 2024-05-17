@@ -12,8 +12,7 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#ifndef WASMEDGE_C_API_SPARE_ENUM_MAP_H
-#define WASMEDGE_C_API_SPARE_ENUM_MAP_H
+#pragma once
 
 #include <algorithm>
 #include <array>
@@ -107,8 +106,14 @@ public:
       : Data(std::addressof(D)), Index(I) {}
 
   constexpr reference operator*() noexcept { return (*Data)[Index]; }
+  constexpr const_reference operator*() const noexcept {
+    return (*Data)[Index];
+  }
 
   constexpr pointer operator->() noexcept {
+    return std::addressof((*Data)[Index]);
+  }
+  constexpr const_pointer operator->() const noexcept {
     return std::addressof((*Data)[Index]);
   }
 
@@ -135,12 +140,12 @@ public:
   }
 
   constexpr ConstIterator &operator+=(difference_type N) noexcept {
-    Index += N;
+    Index = static_cast<size_type>(static_cast<difference_type>(Index) + N);
     return *this;
   }
 
   constexpr ConstIterator &operator-=(difference_type N) noexcept {
-    Index -= N;
+    Index = static_cast<size_type>(static_cast<difference_type>(Index) - N);
     return *this;
   }
 
@@ -197,5 +202,3 @@ private:
 };
 
 } // namespace WasmEdge
-
-#endif // WASMEDGE_C_API_SPARE_ENUM_MAP_H

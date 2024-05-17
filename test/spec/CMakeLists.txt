@@ -2,57 +2,73 @@
 # SPDX-FileCopyrightText: 2019-2022 Second State INC
 
 include(FetchContent)
+
+message(STATUS "Downloading the WASM spec test suite")
 FetchContent_Declare(
   wasmedge_unit_test
   GIT_REPOSITORY https://github.com/second-state/WasmEdge-unittest
-  GIT_TAG wasm-dev-0.9.1
+  GIT_TAG        wasm-dev-0.14.0
 )
 FetchContent_MakeAvailable(wasmedge_unit_test)
+message(STATUS "Downloading the WASM spec test suite -- done")
 
-FetchContent_Declare(
-  rapidjson
-  GIT_REPOSITORY https://github.com/Tencent/rapidjson.git
-  GIT_TAG        master
-  GIT_SHALLOW    TRUE
-)
-get_property(
-  compile_options
-  DIRECTORY
-  PROPERTY COMPILE_OPTIONS
-)
-set_property(
-  DIRECTORY
-  APPEND
-  PROPERTY COMPILE_OPTIONS
-  -Wno-conditional-uninitialized
-  -Wno-implicit-int-conversion
-  -Wno-zero-as-null-pointer-constant
-)
-unset(compile_options)
-set(RAPIDJSON_BUILD_DOC OFF CACHE BOOL "Build rapidjson documentation." FORCE)
-set(RAPIDJSON_BUILD_EXAMPLES OFF CACHE BOOL "Build rapidjson examples." FORCE)
-set(RAPIDJSON_BUILD_TESTS OFF CACHE BOOL "Build rapidjson perftests and unittests." FORCE)
-set(RAPIDJSON_BUILD_CXX11 OFF CACHE BOOL "Build rapidjson with C++11" FORCE)
-set(RAPIDJSON_BUILD_CXX17 ON CACHE BOOL "Build rapidjson with C++17" FORCE)
-FetchContent_MakeAvailable(rapidjson)
-add_library(rapidjson INTERFACE)
-target_include_directories(rapidjson INTERFACE ${rapidjson_SOURCE_DIR}/include)
+find_package(simdjson QUIET)
+if(simdjson_FOUND)
+  message(STATUS "SIMDJSON found")
+else()
+  message(STATUS "Downloading SIMDJSON source")
+  include(FetchContent)
+  FetchContent_Declare(
+    simdjson
+    GIT_REPOSITORY https://github.com/simdjson/simdjson.git
+    GIT_TAG  tags/v3.2.1
+    GIT_SHALLOW TRUE)
 
-file(COPY
-  ${wasmedge_unit_test_SOURCE_DIR}/core
-  DESTINATION
-  ${CMAKE_CURRENT_BINARY_DIR}/testSuites
-)
-file(COPY
-  ${wasmedge_unit_test_SOURCE_DIR}/simd
-  DESTINATION
-  ${CMAKE_CURRENT_BINARY_DIR}/testSuites
-)
-file(COPY
-  ${wasmedge_unit_test_SOURCE_DIR}/multi-memory
-  DESTINATION
-  ${CMAKE_CURRENT_BINARY_DIR}/testSuites
-)
+  if(MSVC)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+      add_compile_options(
+        -Wno-undef
+        -Wno-suggest-override
+        -Wno-documentation
+        -Wno-sign-conversion
+        -Wno-extra-semi-stmt
+        -Wno-old-style-cast
+        -Wno-error=unused-parameter
+        -Wno-error=unused-template
+        -Wno-conditional-uninitialized
+        -Wno-implicit-int-conversion
+        -Wno-shorten-64-to-32
+        -Wno-range-loop-bind-reference
+        -Wno-format-nonliteral
+        -Wno-unused-exception-parameter
+        -Wno-unused-member-function
+        -Wno-missing-prototypes
+      )
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
+      add_compile_options(
+        /wd4100 # unreferenced formal parameter
+        /wd4505 # unreferenced local function has been removed
+      )
+    endif()
+  endif()
+
+  FetchContent_MakeAvailable(simdjson)
+  message(STATUS "Downloading SIMDJSON source -- done")
+endif()
+
+function(wasmedge_copy_spec_testsuite proposal)
+  message(STATUS "Copying test suite to ${CMAKE_CURRENT_BINARY_DIR}/testSuites/${proposal}")
+  file(COPY
+    ${wasmedge_unit_test_SOURCE_DIR}/${proposal}
+    DESTINATION
+    ${CMAKE_CURRENT_BINARY_DIR}/testSuites
+  )
+  message(STATUS "Copying test suite to ${CMAKE_CURRENT_BINARY_DIR}/testSuites/${proposal} -- done")
+endfunction()
+
+foreach(PROPOSAL core multi-memory tail-call extended-const threads function-references gc exception-handling exception-handling-legacy)
+  wasmedge_copy_spec_testsuite(${PROPOSAL})
+endforeach()
 
 wasmedge_add_library(wasmedgeTestSpec
   spectest.cpp
@@ -60,7 +76,7 @@ wasmedge_add_library(wasmedgeTestSpec
 
 target_link_libraries(wasmedgeTestSpec
   PRIVATE
-  rapidjson
+  simdjson::simdjson
   PUBLIC
   std::filesystem
   wasmedgeCommon

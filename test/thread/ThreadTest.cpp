@@ -12,11 +12,12 @@
 ///
 //===----------------------------------------------------------------------===//
 
-#include "common/log.h"
+#include "common/spdlog.h"
 #include "vm/vm.h"
 
-#ifdef WASMEDGE_BUILD_AOT_RUNTIME
-#include "aot/compiler.h"
+#ifdef WASMEDGE_USE_LLVM
+#include "llvm/codegen.h"
+#include "llvm/compiler.h"
 #endif
 
 #include "gtest/gtest.h"
@@ -171,23 +172,23 @@ TEST(AsyncExecute, ThreadTest) {
   ASSERT_TRUE(VM.validate());
   ASSERT_TRUE(VM.instantiate());
   {
-    std::array<WasmEdge::VM::Async<WasmEdge::Expect<std::vector<
+    std::array<WasmEdge::Async<WasmEdge::Expect<std::vector<
                    std::pair<WasmEdge::ValVariant, WasmEdge::ValType>>>>,
                4>
         AsyncResults;
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       AsyncResults[Index] = VM.asyncExecute(
           "mt19937",
-          std::array<const WasmEdge::ValVariant, 3>{
+          std::initializer_list<WasmEdge::ValVariant>{
               UINT32_C(2504) * Index, UINT64_C(5489), UINT64_C(100000) + Index},
-          std::array<const WasmEdge::ValType, 3>{WasmEdge::ValType::I32,
-                                                 WasmEdge::ValType::I64,
-                                                 WasmEdge::ValType::I64});
+          {WasmEdge::ValType(WasmEdge::TypeCode::I32),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64)});
     }
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       auto Result = AsyncResults[Index].get();
       ASSERT_TRUE(Result);
-      ASSERT_EQ((*Result)[0].second, WasmEdge::ValType::I64);
+      ASSERT_EQ((*Result)[0].second.getCode(), WasmEdge::TypeCode::I64);
       EXPECT_EQ((*Result)[0].first.get<uint64_t>(), Answers[Index]);
     }
   }
@@ -203,52 +204,48 @@ TEST(AsyncExecute, GasThreadTest) {
   ASSERT_TRUE(VM.validate());
   ASSERT_TRUE(VM.instantiate());
   {
-    std::array<WasmEdge::VM::Async<WasmEdge::Expect<std::vector<
+    std::array<WasmEdge::Async<WasmEdge::Expect<std::vector<
                    std::pair<WasmEdge::ValVariant, WasmEdge::ValType>>>>,
                4>
         AsyncResults;
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       AsyncResults[Index] = VM.asyncExecute(
           "mt19937",
-          std::array<const WasmEdge::ValVariant, 3>{
+          std::initializer_list<WasmEdge::ValVariant>{
               UINT32_C(2504) * Index, UINT64_C(5489), UINT64_C(100000) + Index},
-          std::array<const WasmEdge::ValType, 3>{WasmEdge::ValType::I32,
-                                                 WasmEdge::ValType::I64,
-                                                 WasmEdge::ValType::I64});
+          {WasmEdge::ValType(WasmEdge::TypeCode::I32),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64)});
     }
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       auto Result = AsyncResults[Index].get();
       ASSERT_TRUE(Result);
-      ASSERT_EQ((*Result)[0].second, WasmEdge::ValType::I64);
+      ASSERT_EQ((*Result)[0].second.getCode(), WasmEdge::TypeCode::I64);
       EXPECT_EQ((*Result)[0].first.get<uint64_t>(), Answers[Index]);
     }
   }
 }
 
-#ifdef WASMEDGE_BUILD_AOT_RUNTIME
-
-#if WASMEDGE_OS_LINUX
-#define EXTENSION ".so"sv
-#elif WASMEDGE_OS_MACOS
-#define EXTENSION ".dylib"sv
-#elif WASMEDGE_OS_WINDOWS
-#define EXTENSION ".dll"sv
-#endif
+#ifdef WASMEDGE_USE_LLVM
 
 TEST(AOTAsyncExecute, ThreadTest) {
   WasmEdge::Configure Conf;
   Conf.getCompilerConfigure().setInterruptible(true);
   Conf.getCompilerConfigure().setOutputFormat(
       WasmEdge::CompilerConfigure::OutputFormat::Native);
-  const auto Path = std::filesystem::temp_directory_path() /
-                    std::filesystem::u8path("ThreadTest" EXTENSION);
+  const auto Path =
+      std::filesystem::temp_directory_path() /
+      std::filesystem::u8path("ThreadTest" WASMEDGE_LIB_EXTENSION);
   {
     WasmEdge::Loader::Loader Loader(Conf);
     WasmEdge::Validator::Validator ValidatorEngine(Conf);
-    WasmEdge::AOT::Compiler Compiler(Conf);
+    WasmEdge::LLVM::Compiler Compiler(Conf);
+    WasmEdge::LLVM::CodeGen CodeGen(Conf);
     auto Module = *Loader.parseModule(MersenneTwister19937);
     ASSERT_TRUE(ValidatorEngine.validate(*Module));
-    ASSERT_TRUE(Compiler.compile(MersenneTwister19937, *Module, Path));
+    auto Data = Compiler.compile(*Module);
+    ASSERT_TRUE(Data);
+    ASSERT_TRUE(CodeGen.codegen(MersenneTwister19937, std::move(*Data), Path));
   }
 
   WasmEdge::VM::VM VM(Conf);
@@ -256,27 +253,28 @@ TEST(AOTAsyncExecute, ThreadTest) {
   ASSERT_TRUE(VM.validate());
   ASSERT_TRUE(VM.instantiate());
   {
-    std::array<WasmEdge::VM::Async<WasmEdge::Expect<std::vector<
+    std::array<WasmEdge::Async<WasmEdge::Expect<std::vector<
                    std::pair<WasmEdge::ValVariant, WasmEdge::ValType>>>>,
                4>
         AsyncResults;
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       AsyncResults[Index] = VM.asyncExecute(
           "mt19937",
-          std::array<const WasmEdge::ValVariant, 3>{
+          std::initializer_list<WasmEdge::ValVariant>{
               UINT32_C(2504) * Index, UINT64_C(5489), UINT64_C(100000) + Index},
-          std::array<const WasmEdge::ValType, 3>{WasmEdge::ValType::I32,
-                                                 WasmEdge::ValType::I64,
-                                                 WasmEdge::ValType::I64});
+          {WasmEdge::ValType(WasmEdge::TypeCode::I32),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64)});
     }
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       auto Result = AsyncResults[Index].get();
       ASSERT_TRUE(Result);
-      ASSERT_EQ((*Result)[0].second, WasmEdge::ValType::I64);
+      ASSERT_EQ((*Result)[0].second.getCode(), WasmEdge::TypeCode::I64);
       EXPECT_EQ((*Result)[0].first.get<uint64_t>(), Answers[Index]);
     }
   }
-  std::filesystem::remove(Path);
+  VM.cleanup();
+  EXPECT_NO_THROW(std::filesystem::remove(Path));
 }
 
 TEST(AOTAsyncExecute, GasThreadTest) {
@@ -288,15 +286,18 @@ TEST(AOTAsyncExecute, GasThreadTest) {
   Conf.getCompilerConfigure().setOutputFormat(
       WasmEdge::CompilerConfigure::OutputFormat::Native);
   auto Path = std::filesystem::temp_directory_path() /
-              std::filesystem::u8path("AOTGasTest" EXTENSION);
+              std::filesystem::u8path("AOTGasTest" WASMEDGE_LIB_EXTENSION);
 
   {
     WasmEdge::Loader::Loader Loader(Conf);
     WasmEdge::Validator::Validator ValidatorEngine(Conf);
-    WasmEdge::AOT::Compiler Compiler(Conf);
+    WasmEdge::LLVM::Compiler Compiler(Conf);
+    WasmEdge::LLVM::CodeGen CodeGen(Conf);
     auto Module = *Loader.parseModule(MersenneTwister19937);
     ASSERT_TRUE(ValidatorEngine.validate(*Module));
-    ASSERT_TRUE(Compiler.compile(MersenneTwister19937, *Module, Path));
+    auto Data = Compiler.compile(*Module);
+    ASSERT_TRUE(Data);
+    ASSERT_TRUE(CodeGen.codegen(MersenneTwister19937, std::move(*Data), Path));
   }
 
   WasmEdge::VM::VM VM(Conf);
@@ -304,27 +305,28 @@ TEST(AOTAsyncExecute, GasThreadTest) {
   ASSERT_TRUE(VM.validate());
   ASSERT_TRUE(VM.instantiate());
   {
-    std::array<WasmEdge::VM::Async<WasmEdge::Expect<std::vector<
+    std::array<WasmEdge::Async<WasmEdge::Expect<std::vector<
                    std::pair<WasmEdge::ValVariant, WasmEdge::ValType>>>>,
                4>
         AsyncResults;
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       AsyncResults[Index] = VM.asyncExecute(
           "mt19937",
-          std::array<const WasmEdge::ValVariant, 3>{
+          std::initializer_list<WasmEdge::ValVariant>{
               UINT32_C(2504) * Index, UINT64_C(5489), UINT64_C(100000) + Index},
-          std::array<const WasmEdge::ValType, 3>{WasmEdge::ValType::I32,
-                                                 WasmEdge::ValType::I64,
-                                                 WasmEdge::ValType::I64});
+          {WasmEdge::ValType(WasmEdge::TypeCode::I32),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64),
+           WasmEdge::ValType(WasmEdge::TypeCode::I64)});
     }
     for (uint64_t Index = 0; Index < Answers.size(); ++Index) {
       auto Result = AsyncResults[Index].get();
       ASSERT_TRUE(Result);
-      ASSERT_EQ((*Result)[0].second, WasmEdge::ValType::I64);
+      ASSERT_EQ((*Result)[0].second.getCode(), WasmEdge::TypeCode::I64);
       EXPECT_EQ((*Result)[0].first.get<uint64_t>(), Answers[Index]);
     }
   }
-  std::filesystem::remove(Path);
+  VM.cleanup();
+  EXPECT_NO_THROW(std::filesystem::remove(Path));
 }
 
 #endif

@@ -13,6 +13,7 @@
 //===----------------------------------------------------------------------===//
 #pragma once
 
+#include "common/async.h"
 #include "common/configure.h"
 #include "common/errcode.h"
 #include "common/filesystem.h"
@@ -22,22 +23,21 @@
 #include "loader/loader.h"
 #include "validator/validator.h"
 
-#include "runtime/importobj.h"
+#include "runtime/instance/module.h"
 #include "runtime/storemgr.h"
 
 #include <cstdint>
-#include <map>
 #include <memory>
 #include <shared_mutex>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace WasmEdge {
 namespace VM {
 
-template <typename T> class Async;
 /// VM execution flow class
 class VM {
 public:
@@ -62,9 +62,10 @@ public:
     std::unique_lock Lock(Mutex);
     return unsafeRegisterModule(Name, Module);
   }
-  Expect<void> registerModule(const Runtime::ImportObject &Obj) {
+  Expect<void>
+  registerModule(const Runtime::Instance::ModuleInstance &ModInst) {
     std::unique_lock Lock(Mutex);
-    return unsafeRegisterModule(Obj);
+    return unsafeRegisterModule(ModInst);
   }
 
   /// Rapidly load, validate, instantiate, and run wasm function.
@@ -160,8 +161,6 @@ public:
                Span<const ValVariant> Params = {},
                Span<const ValType> ParamTypes = {});
 
-  /// Register new thread
-  void newThread() noexcept { ExecutorEngine.newThread(); }
   /// Stop execution
   void stop() noexcept { ExecutorEngine.stop(); }
 
@@ -179,17 +178,36 @@ public:
     return unsafeGetFunctionList();
   }
 
-  /// Get import objects by configurations.
-  Runtime::ImportObject *getImportModule(const HostRegistration Type) const {
+  /// Get pre-registered module instance by configuration.
+  Runtime::Instance::ModuleInstance *
+  getImportModule(const HostRegistration Type) const {
     std::shared_lock Lock(Mutex);
     return unsafeGetImportModule(Type);
   }
 
+  /// Get current instantiated module instance.
+  const Runtime::Instance::ModuleInstance *getActiveModule() const {
+    std::shared_lock Lock(Mutex);
+    return unsafeGetActiveModule();
+  }
+
   /// Getter of store set in VM.
-  Runtime::StoreManager &getStoreManager() { return StoreRef; }
+  Runtime::StoreManager &getStoreManager() noexcept { return StoreRef; }
+  const Runtime::StoreManager &getStoreManager() const noexcept {
+    return StoreRef;
+  }
+
+  /// Getter of loader in VM.
+  Loader::Loader &getLoader() noexcept { return LoaderEngine; }
+
+  /// Getter of validator in VM.
+  Validator::Validator &getValidator() noexcept { return ValidatorEngine; }
+
+  /// Getter of executor in VM.
+  Executor::Executor &getExecutor() noexcept { return ExecutorEngine; }
 
   /// Getter of statistics.
-  Statistics::Statistics &getStatistics() { return Stat; }
+  Statistics::Statistics &getStatistics() noexcept { return Stat; }
 
 private:
   Expect<void> unsafeRegisterModule(std::string_view Name,
@@ -198,7 +216,8 @@ private:
                                     Span<const Byte> Code);
   Expect<void> unsafeRegisterModule(std::string_view Name,
                                     const AST::Module &Module);
-  Expect<void> unsafeRegisterModule(const Runtime::ImportObject &Obj);
+  Expect<void>
+  unsafeRegisterModule(const Runtime::Instance::ModuleInstance &ModInst);
 
   Expect<std::vector<std::pair<ValVariant, ValType>>>
   unsafeRunWasmFile(const std::filesystem::path &Path, std::string_view Func,
@@ -211,6 +230,10 @@ private:
   Expect<std::vector<std::pair<ValVariant, ValType>>>
   unsafeRunWasmFile(const AST::Module &Module, std::string_view Func,
                     Span<const ValVariant> Params = {},
+                    Span<const ValType> ParamTypes = {});
+  Expect<std::vector<std::pair<ValVariant, ValType>>>
+  unsafeRunWasmFile(const AST::Component::Component &Component,
+                    std::string_view Func, Span<const ValVariant> Params = {},
                     Span<const ValType> ParamTypes = {});
 
   Expect<void> unsafeLoadWasm(const std::filesystem::path &Path);
@@ -235,39 +258,61 @@ private:
   std::vector<std::pair<std::string, const AST::FunctionType &>>
   unsafeGetFunctionList() const;
 
-  Runtime::ImportObject *
+  Runtime::Instance::ModuleInstance *
   unsafeGetImportModule(const HostRegistration Type) const;
+
+  const Runtime::Instance::ModuleInstance *unsafeGetActiveModule() const;
 
   enum class VMStage : uint8_t { Inited, Loaded, Validated, Instantiated };
 
   void unsafeInitVM();
+  void unsafeLoadBuiltInHosts();
+  void unsafeLoadPlugInHosts();
+  void unsafeRegisterBuiltInHosts();
+  void unsafeRegisterPlugInHosts();
 
   /// Helper function for execution.
   Expect<std::vector<std::pair<ValVariant, ValType>>>
-  unsafeExecute(Runtime::Instance::ModuleInstance *ModInst,
+  unsafeExecute(const Runtime::Instance::ModuleInstance *ModInst,
                 std::string_view Func, Span<const ValVariant> Params = {},
                 Span<const ValType> ParamTypes = {});
 
-  mutable std::shared_mutex Mutex;
-
-  /// VM environment.
+  /// \name VM environment.
+  /// @{
   const Configure Conf;
   Statistics::Statistics Stat;
   VMStage Stage;
+  mutable std::shared_mutex Mutex;
+  /// @}
 
-  /// VM runners.
+  /// \name VM components.
+  /// @{
   Loader::Loader LoaderEngine;
   Validator::Validator ValidatorEngine;
   Executor::Executor ExecutorEngine;
+  /// @}
 
-  /// VM Storage.
+  /// \name VM Storage.
+  /// @{
+  /// Loaded AST module.
   std::unique_ptr<AST::Module> Mod;
+  /// Active module instance.
+  std::unique_ptr<Runtime::Instance::ModuleInstance> ActiveModInst;
+  /// Registered module instances by user.
+  std::vector<std::unique_ptr<Runtime::Instance::ModuleInstance>> RegModInsts;
+  /// Built-in module instances mapped to the configurations. For WASI.
+  std::unordered_map<HostRegistration,
+                     std::unique_ptr<Runtime::Instance::ModuleInstance>>
+      BuiltInModInsts;
+  /// Loaded module instances from plug-ins.
+  std::vector<std::unique_ptr<Runtime::Instance::ModuleInstance>>
+      PlugInModInsts;
+  /// Self-owned store (nullptr if an outside store is assigned in constructor).
   std::unique_ptr<Runtime::StoreManager> Store;
+  /// Reference to the store.
   Runtime::StoreManager &StoreRef;
-  std::map<HostRegistration, std::unique_ptr<Runtime::ImportObject>> ImpObjs;
+  /// @}
 };
 
 } // namespace VM
 } // namespace WasmEdge
-
-#include "async.h"

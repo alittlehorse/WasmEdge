@@ -10,16 +10,13 @@
 namespace WasmEdge {
 namespace Executor {
 
-Expect<void> Executor::runExpression(Runtime::StoreManager &StoreMgr,
-                                     Runtime::StackManager &StackMgr,
+Expect<void> Executor::runExpression(Runtime::StackManager &StackMgr,
                                      AST::InstrView Instrs) {
-  StackMgr.pushLabel(0, 0, Instrs.end() - 1);
-  return execute(StoreMgr, StackMgr, Instrs.begin(), Instrs.end());
+  return execute(StackMgr, Instrs.begin(), Instrs.end());
 }
 
 Expect<void>
-Executor::runFunction(Runtime::StoreManager &StoreMgr,
-                      Runtime::StackManager &StackMgr,
+Executor::runFunction(Runtime::StackManager &StackMgr,
                       const Runtime::Instance::FunctionInstance &Func,
                       Span<const ValVariant> Params) {
   // Set start time.
@@ -28,27 +25,47 @@ Executor::runFunction(Runtime::StoreManager &StoreMgr,
   }
 
   // Reset and push a dummy frame into stack.
-  StackMgr.reset();
-  StackMgr.pushDummyFrame();
+  StackMgr.pushFrame(nullptr, AST::InstrView::iterator(), 0, 0);
 
   // Push arguments.
-  for (auto &Val : Params) {
-    StackMgr.push(Val);
+  const auto &PTypes = Func.getFuncType().getParamTypes();
+  for (uint32_t I = 0; I < Params.size(); I++) {
+    // For the references, transform to non-null reference type if the value not
+    // null.
+    if (PTypes[I].isRefType() && Params[I].get<RefVariant>().getPtr<void>() &&
+        Params[I].get<RefVariant>().getType().isNullableRefType()) {
+      auto Val = Params[I];
+      Val.get<RefVariant>().getType().toNonNullableRef();
+      StackMgr.push(Val);
+    } else {
+      StackMgr.push(Params[I]);
+    }
   }
 
   // Enter and execute function.
-  AST::InstrView::iterator StartIt;
-  if (auto Res =
-          enterFunction(StoreMgr, StackMgr, Func, Func.getInstrs().end())) {
-    StartIt = *Res;
+  AST::InstrView::iterator StartIt = {};
+  Expect<void> Res = {};
+  if (auto GetIt = enterFunction(StackMgr, Func, Func.getInstrs().end())) {
+    StartIt = *GetIt;
   } else {
-    return Unexpect(Res);
+    if (GetIt.error() == ErrCode::Value::Terminated) {
+      // Handle the terminated case in entering AOT or host functions.
+      // For the terminated case, not return now to print the statistics.
+      Res = Unexpect(GetIt.error());
+    } else {
+      return Unexpect(GetIt);
+    }
   }
-  auto Res = execute(StoreMgr, StackMgr, StartIt, Func.getInstrs().end());
+  if (Res) {
+    // If not terminated, execute the instructions in interpreter mode.
+    // For the entering AOT or host functions, the `StartIt` is equal to the end
+    // of instruction list, therefore the execution will return immediately.
+    Res = execute(StackMgr, StartIt, Func.getInstrs().end());
+  }
 
   if (Res) {
     spdlog::debug(" Execution succeeded.");
-  } else if (Res.error() == ErrCode::Terminated) {
+  } else if (Res.error() == ErrCode::Value::Terminated) {
     spdlog::debug(" Terminated.");
   }
 
@@ -61,86 +78,230 @@ Executor::runFunction(Runtime::StoreManager &StoreMgr,
     Stat->dumpToLog(Conf);
   }
 
-  if (Res || Res.error() == ErrCode::Terminated) {
+  if (Res) {
     return {};
+  }
+  if (Res.error() == ErrCode::Value::Terminated) {
+    StackMgr.reset();
   }
   return Unexpect(Res);
 }
 
-Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
-                               Runtime::StackManager &StackMgr,
+Expect<void> Executor::execute(Runtime::StackManager &StackMgr,
                                const AST::InstrView::iterator Start,
                                const AST::InstrView::iterator End) {
   AST::InstrView::iterator PC = Start;
   AST::InstrView::iterator PCEnd = End;
 
-  auto Dispatch = [this, &PC, &StoreMgr, &StackMgr]() -> Expect<void> {
+  auto Dispatch = [this, &PC, &StackMgr]() -> Expect<void> {
     const AST::Instruction &Instr = *PC;
+
+    auto GetDstCompType = [&StackMgr, &Instr, this]() {
+      return getDefTypeByIdx(StackMgr, Instr.getTargetIndex())
+          ->getCompositeType();
+    };
+    auto GetSrcCompType = [&StackMgr, &Instr, this]() {
+      return getDefTypeByIdx(StackMgr, Instr.getSourceIndex())
+          ->getCompositeType();
+    };
+
     switch (Instr.getOpCode()) {
     // Control instructions.
     case OpCode::Unreachable:
-      spdlog::error(ErrCode::Unreachable);
+      spdlog::error(ErrCode::Value::Unreachable);
       spdlog::error(
           ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));
-      return Unexpect(ErrCode::Unreachable);
+      return Unexpect(ErrCode::Value::Unreachable);
     case OpCode::Nop:
       return {};
     case OpCode::Block:
-      return runBlockOp(StoreMgr, StackMgr, Instr, PC);
+      return {};
     case OpCode::Loop:
-      return runLoopOp(StoreMgr, StackMgr, Instr, PC);
+      return {};
     case OpCode::If:
-      return runIfElseOp(StoreMgr, StackMgr, Instr, PC);
+      return runIfElseOp(StackMgr, Instr, PC);
     case OpCode::Else:
       if (Stat && Conf.getStatisticsConfigure().isCostMeasuring()) {
         // Reach here means end of if-statement.
         if (unlikely(!Stat->subInstrCost(Instr.getOpCode()))) {
+          spdlog::error(ErrCode::Value::CostLimitExceeded);
           spdlog::error(
               ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));
-          return Unexpect(ErrCode::CostLimitExceeded);
+          return Unexpect(ErrCode::Value::CostLimitExceeded);
         }
         if (unlikely(!Stat->addInstrCost(OpCode::End))) {
+          spdlog::error(ErrCode::Value::CostLimitExceeded);
           spdlog::error(
               ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));
-          return Unexpect(ErrCode::CostLimitExceeded);
+          return Unexpect(ErrCode::Value::CostLimitExceeded);
         }
       }
-      [[fallthrough]];
-    case OpCode::End:
-      PC = StackMgr.leaveLabel();
+      PC += PC->getJumpEnd() - 1;
       return {};
+    case OpCode::End:
+      PC = StackMgr.maybePopFrameOrHandler(PC);
+      return {};
+    // LEGACY-EH: remove the `Try` cases after deprecating legacy EH.
+    case OpCode::Try:
+      return runTryTableOp(StackMgr, Instr, PC);
+    case OpCode::Throw:
+      return runThrowOp(StackMgr, Instr, PC);
+    case OpCode::Throw_ref:
+      return runThrowRefOp(StackMgr, Instr, PC);
     case OpCode::Br:
-      return runBrOp(StoreMgr, StackMgr, Instr, PC);
+      return runBrOp(StackMgr, Instr, PC);
     case OpCode::Br_if:
-      return runBrIfOp(StoreMgr, StackMgr, Instr, PC);
+      return runBrIfOp(StackMgr, Instr, PC);
     case OpCode::Br_table:
-      return runBrTableOp(StoreMgr, StackMgr, Instr, PC);
+      return runBrTableOp(StackMgr, Instr, PC);
+    case OpCode::Br_on_null:
+      return runBrOnNullOp(StackMgr, Instr, PC);
+    case OpCode::Br_on_non_null:
+      return runBrOnNonNullOp(StackMgr, Instr, PC);
+    case OpCode::Br_on_cast:
+      return runBrOnCastOp(StackMgr, Instr, PC);
+    case OpCode::Br_on_cast_fail:
+      return runBrOnCastOp(StackMgr, Instr, PC, true);
     case OpCode::Return:
       return runReturnOp(StackMgr, PC);
     case OpCode::Call:
-      return runCallOp(StoreMgr, StackMgr, Instr, PC);
+      return runCallOp(StackMgr, Instr, PC);
     case OpCode::Call_indirect:
-      return runCallIndirectOp(StoreMgr, StackMgr, Instr, PC);
+      return runCallIndirectOp(StackMgr, Instr, PC);
+    case OpCode::Return_call:
+      return runCallOp(StackMgr, Instr, PC, true);
+    case OpCode::Return_call_indirect:
+      return runCallIndirectOp(StackMgr, Instr, PC, true);
+    case OpCode::Call_ref:
+      return runCallRefOp(StackMgr, Instr, PC);
+    case OpCode::Return_call_ref:
+      return runCallRefOp(StackMgr, Instr, PC, true);
+    // LEGACY-EH: remove the `Catch` cases after deprecating legacy EH.
+    case OpCode::Catch:
+    case OpCode::Catch_all:
+      PC -= Instr.getCatchLegacy().CatchPCOffset;
+      PC += PC->getTryCatch().JumpEnd;
+      return {};
+    case OpCode::Try_table:
+      return runTryTableOp(StackMgr, Instr, PC);
 
     // Reference Instructions
     case OpCode::Ref__null:
-      StackMgr.push(UnknownRef());
-      return {};
-    case OpCode::Ref__is_null: {
-      ValVariant &Val = StackMgr.getTop();
-      if (isNullRef(Val)) {
-        Val.emplace<uint32_t>(UINT32_C(1));
-      } else {
-        Val.emplace<uint32_t>(UINT32_C(0));
-      }
-      return {};
+      return runRefNullOp(StackMgr, Instr.getValType());
+    case OpCode::Ref__is_null:
+      return runRefIsNullOp(StackMgr.getTop());
+    case OpCode::Ref__func:
+      return runRefFuncOp(StackMgr, Instr.getTargetIndex());
+    case OpCode::Ref__eq: {
+      ValVariant Rhs = StackMgr.pop();
+      return runRefEqOp(StackMgr.getTop(), Rhs);
     }
-    case OpCode::Ref__func: {
-      const auto *ModInst = *StoreMgr.getModule(StackMgr.getModuleAddr());
-      const uint32_t FuncAddr = *ModInst->getFuncAddr(Instr.getTargetIndex());
-      StackMgr.push(FuncRef(FuncAddr));
-      return {};
+    case OpCode::Ref__as_non_null:
+      return runRefAsNonNullOp(StackMgr.getTop().get<RefVariant>(), Instr);
+
+      // GC Instructions
+    case OpCode::Struct__new:
+      return runStructNewOp(StackMgr, Instr.getTargetIndex());
+    case OpCode::Struct__new_default:
+      return runStructNewOp(StackMgr, Instr.getTargetIndex(), true);
+    case OpCode::Struct__get:
+    case OpCode::Struct__get_u:
+      return runStructGetOp(StackMgr.getTop(), Instr.getSourceIndex(),
+                            GetDstCompType(), Instr);
+    case OpCode::Struct__get_s:
+      return runStructGetOp(StackMgr.getTop(), Instr.getSourceIndex(),
+                            GetDstCompType(), Instr, true);
+    case OpCode::Struct__set: {
+      const ValVariant Val = StackMgr.pop();
+      RefVariant StructRef = StackMgr.pop().get<RefVariant>();
+      return runStructSetOp(Val, StructRef, GetDstCompType(),
+                            Instr.getSourceIndex(), Instr);
     }
+    case OpCode::Array__new:
+      return runArrayNewOp(StackMgr, Instr.getTargetIndex(), 1,
+                           StackMgr.pop().get<uint32_t>());
+    case OpCode::Array__new_default:
+      return runArrayNewOp(StackMgr, Instr.getTargetIndex(), 0,
+                           StackMgr.pop().get<uint32_t>());
+    case OpCode::Array__new_fixed:
+      return runArrayNewOp(StackMgr, Instr.getTargetIndex(),
+                           Instr.getSourceIndex(), Instr.getSourceIndex());
+    case OpCode::Array__new_data:
+      return runArrayNewDataOp(
+          StackMgr, *getDataInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
+    case OpCode::Array__new_elem:
+      return runArrayNewElemOp(
+          StackMgr, *getElemInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
+    case OpCode::Array__get:
+    case OpCode::Array__get_u: {
+      const uint32_t Idx = StackMgr.pop().get<uint32_t>();
+      return runArrayGetOp(StackMgr.getTop(), Idx, GetDstCompType(), Instr);
+    }
+    case OpCode::Array__get_s: {
+      const uint32_t Idx = StackMgr.pop().get<uint32_t>();
+      return runArrayGetOp(StackMgr.getTop(), Idx, GetDstCompType(), Instr,
+                           true);
+    }
+    case OpCode::Array__set: {
+      ValVariant Val = StackMgr.pop();
+      const uint32_t Idx = StackMgr.pop().get<uint32_t>();
+      RefVariant ArrayRef = StackMgr.pop().get<RefVariant>();
+      return runArraySetOp(Val, Idx, ArrayRef, GetDstCompType(), Instr);
+    }
+    case OpCode::Array__len:
+      return runArrayLenOp(StackMgr.getTop(), Instr);
+    case OpCode::Array__fill: {
+      const uint32_t N = StackMgr.pop().get<uint32_t>();
+      const ValVariant Val = StackMgr.pop();
+      const uint32_t D = StackMgr.pop().get<uint32_t>();
+      RefVariant ArrayRef = StackMgr.pop().get<RefVariant>();
+      return runArrayFillOp(N, Val, D, ArrayRef, GetDstCompType(), Instr);
+    }
+    case OpCode::Array__copy: {
+      const uint32_t N = StackMgr.pop().get<uint32_t>();
+      const uint32_t S = StackMgr.pop().get<uint32_t>();
+      RefVariant SrcArrayRef = StackMgr.pop().get<RefVariant>();
+      const uint32_t D = StackMgr.pop().get<uint32_t>();
+      RefVariant DstArrayRef = StackMgr.pop().get<RefVariant>();
+      return runArrayCopyOp(N, S, SrcArrayRef, D, DstArrayRef, GetSrcCompType(),
+                            GetDstCompType(), Instr);
+    }
+    case OpCode::Array__init_data: {
+      const uint32_t N = StackMgr.pop().get<uint32_t>();
+      const uint32_t S = StackMgr.pop().get<uint32_t>();
+      const uint32_t D = StackMgr.pop().get<uint32_t>();
+      RefVariant ArrayRef = StackMgr.pop().get<RefVariant>();
+      return runArrayInitDataOp(
+          N, S, D, ArrayRef, GetDstCompType(),
+          *getDataInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
+    }
+    case OpCode::Array__init_elem: {
+      const uint32_t N = StackMgr.pop().get<uint32_t>();
+      const uint32_t S = StackMgr.pop().get<uint32_t>();
+      const uint32_t D = StackMgr.pop().get<uint32_t>();
+      RefVariant ArrayRef = StackMgr.pop().get<RefVariant>();
+      return runArrayInitElemOp(
+          N, S, D, ArrayRef, GetDstCompType(),
+          *getElemInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
+    }
+    case OpCode::Ref__test:
+    case OpCode::Ref__test_null:
+      return runRefTestOp(StackMgr.getModule(), StackMgr.getTop(), Instr);
+    case OpCode::Ref__cast:
+    case OpCode::Ref__cast_null:
+      return runRefTestOp(StackMgr.getModule(), StackMgr.getTop(), Instr, true);
+    case OpCode::Any__convert_extern:
+      return runRefConvOp(StackMgr.getTop().get<RefVariant>(),
+                          TypeCode::AnyRef);
+    case OpCode::Extern__convert_any:
+      return runRefConvOp(StackMgr.getTop().get<RefVariant>(),
+                          TypeCode::ExternRef);
+    case OpCode::Ref__i31:
+      return runRefI31Op(StackMgr.getTop());
+    case OpCode::I31__get_s:
+      return runI31GetOp(StackMgr.getTop(), Instr, true);
+    case OpCode::I31__get_u:
+      return runI31GetOp(StackMgr.getTop(), Instr);
 
     // Parametric Instructions
     case OpCode::Drop:
@@ -164,182 +325,132 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
 
     // Variable Instructions
     case OpCode::Local__get:
-      return runLocalGetOp(StackMgr, Instr.getTargetIndex());
+      return runLocalGetOp(StackMgr, Instr.getStackOffset());
     case OpCode::Local__set:
-      return runLocalSetOp(StackMgr, Instr.getTargetIndex());
+      return runLocalSetOp(StackMgr, Instr.getStackOffset());
     case OpCode::Local__tee:
-      return runLocalTeeOp(StackMgr, Instr.getTargetIndex());
+      return runLocalTeeOp(StackMgr, Instr.getStackOffset());
     case OpCode::Global__get:
-      return runGlobalGetOp(StoreMgr, StackMgr, Instr.getTargetIndex());
+      return runGlobalGetOp(StackMgr, Instr.getTargetIndex());
     case OpCode::Global__set:
-      return runGlobalSetOp(StoreMgr, StackMgr, Instr.getTargetIndex());
+      return runGlobalSetOp(StackMgr, Instr.getTargetIndex());
 
     // Table Instructions
     case OpCode::Table__get:
       return runTableGetOp(
-          StackMgr,
-          *getTabInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getTabInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::Table__set:
       return runTableSetOp(
-          StackMgr,
-          *getTabInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getTabInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::Table__init:
       return runTableInitOp(
-          StackMgr,
-          *getTabInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()),
-          *getElemInstByIdx(StoreMgr, StackMgr, Instr.getSourceIndex()), Instr);
+          StackMgr, *getTabInstByIdx(StackMgr, Instr.getTargetIndex()),
+          *getElemInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
     case OpCode::Elem__drop:
-      return runElemDropOp(
-          *getElemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()));
+      return runElemDropOp(*getElemInstByIdx(StackMgr, Instr.getTargetIndex()));
     case OpCode::Table__copy:
       return runTableCopyOp(
-          StackMgr,
-          *getTabInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()),
-          *getTabInstByIdx(StoreMgr, StackMgr, Instr.getSourceIndex()), Instr);
+          StackMgr, *getTabInstByIdx(StackMgr, Instr.getTargetIndex()),
+          *getTabInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
     case OpCode::Table__grow:
-      return runTableGrowOp(StackMgr, *getTabInstByIdx(StoreMgr, StackMgr,
-                                                       Instr.getTargetIndex()));
+      return runTableGrowOp(StackMgr,
+                            *getTabInstByIdx(StackMgr, Instr.getTargetIndex()));
     case OpCode::Table__size:
-      return runTableSizeOp(StackMgr, *getTabInstByIdx(StoreMgr, StackMgr,
-                                                       Instr.getTargetIndex()));
+      return runTableSizeOp(StackMgr,
+                            *getTabInstByIdx(StackMgr, Instr.getTargetIndex()));
     case OpCode::Table__fill:
       return runTableFillOp(
-          StackMgr,
-          *getTabInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getTabInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
 
     // Memory Instructions
     case OpCode::I32__load:
       return runLoadOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load:
       return runLoadOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::F32__load:
       return runLoadOp<float>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::F64__load:
       return runLoadOp<double>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__load8_s:
-      return runLoadOp<int32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          8);
+      return runLoadOp<int32_t, 8>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__load8_u:
-      return runLoadOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          8);
+      return runLoadOp<uint32_t, 8>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__load16_s:
-      return runLoadOp<int32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          16);
+      return runLoadOp<int32_t, 16>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__load16_u:
-      return runLoadOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          16);
+      return runLoadOp<uint32_t, 16>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load8_s:
-      return runLoadOp<int64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          8);
+      return runLoadOp<int64_t, 8>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load8_u:
-      return runLoadOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          8);
+      return runLoadOp<uint64_t, 8>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load16_s:
-      return runLoadOp<int64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          16);
+      return runLoadOp<int64_t, 16>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load16_u:
-      return runLoadOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          16);
+      return runLoadOp<uint64_t, 16>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load32_s:
-      return runLoadOp<int64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          32);
+      return runLoadOp<int64_t, 32>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__load32_u:
-      return runLoadOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          32);
+      return runLoadOp<uint64_t, 32>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__store:
       return runStoreOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__store:
       return runStoreOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::F32__store:
       return runStoreOp<float>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::F64__store:
       return runStoreOp<double>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__store8:
-      return runStoreOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          8);
+      return runStoreOp<uint32_t, 8>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I32__store16:
-      return runStoreOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          16);
+      return runStoreOp<uint32_t, 16>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__store8:
-      return runStoreOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          8);
+      return runStoreOp<uint64_t, 8>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__store16:
-      return runStoreOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          16);
+      return runStoreOp<uint64_t, 16>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::I64__store32:
-      return runStoreOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          32);
+      return runStoreOp<uint64_t, 32>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::Memory__grow:
       return runMemoryGrowOp(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()));
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()));
     case OpCode::Memory__size:
       return runMemorySizeOp(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()));
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()));
     case OpCode::Memory__init:
       return runMemoryInitOp(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()),
-          *getDataInstByIdx(StoreMgr, StackMgr, Instr.getSourceIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()),
+          *getDataInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
     case OpCode::Data__drop:
-      return runDataDropOp(
-          *getDataInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()));
+      return runDataDropOp(*getDataInstByIdx(StackMgr, Instr.getTargetIndex()));
     case OpCode::Memory__copy:
       return runMemoryCopyOp(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()),
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getSourceIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()),
+          *getMemInstByIdx(StackMgr, Instr.getSourceIndex()), Instr);
     case OpCode::Memory__fill:
       return runMemoryFillOp(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
 
     // Const numeric instructions
     case OpCode::I32__const:
@@ -780,94 +891,70 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
     // SIMD Memory Instructions
     case OpCode::V128__load:
       return runLoadOp<uint128_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load8x8_s:
       return runLoadExpandOp<int8_t, int16_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load8x8_u:
       return runLoadExpandOp<uint8_t, uint16_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load16x4_s:
       return runLoadExpandOp<int16_t, int32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load16x4_u:
       return runLoadExpandOp<uint16_t, uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load32x2_s:
       return runLoadExpandOp<int32_t, int64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load32x2_u:
       return runLoadExpandOp<uint32_t, uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load8_splat:
       return runLoadSplatOp<uint8_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load16_splat:
       return runLoadSplatOp<uint16_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load32_splat:
       return runLoadSplatOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load64_splat:
       return runLoadSplatOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load32_zero:
-      return runLoadOp<uint128_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          32);
+      return runLoadOp<uint128_t, 32>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load64_zero:
-      return runLoadOp<uint128_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr,
-          64);
+      return runLoadOp<uint128_t, 64>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__store:
       return runStoreOp<uint128_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load8_lane:
       return runLoadLaneOp<uint8_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load16_lane:
       return runLoadLaneOp<uint16_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load32_lane:
       return runLoadLaneOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__load64_lane:
       return runLoadLaneOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__store8_lane:
       return runStoreLaneOp<uint8_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__store16_lane:
       return runStoreLaneOp<uint16_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__store32_lane:
       return runStoreLaneOp<uint32_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
     case OpCode::V128__store64_lane:
       return runStoreLaneOp<uint64_t>(
-          StackMgr,
-          *getMemInstByIdx(StoreMgr, StackMgr, Instr.getTargetIndex()), Instr);
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
 
     // SIMD Const Instructions
     case OpCode::V128__const:
@@ -945,7 +1032,26 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
                                       Instr.getMemoryLane());
     }
 
-      // SIMD Numeric Instructions
+    // SIMD Numeric Instructions
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+    case OpCode::I8x16__swizzle: {
+      const ValVariant Val2 = StackMgr.pop();
+      ValVariant &Val1 = StackMgr.getTop();
+      const uint8x16_t &Index = Val2.get<uint8x16_t>();
+      uint8x16_t &Vector = Val1.get<uint8x16_t>();
+      uint8x16_t Result;
+      for (size_t I = 0; I < 16; ++I) {
+        const uint8_t SwizzleIndex = Index[I];
+        if (SwizzleIndex < 16) {
+          Result[I] = Vector[SwizzleIndex];
+        } else {
+          Result[I] = 0;
+        }
+      }
+      Vector = Result;
+      return {};
+    }
+#else
     case OpCode::I8x16__swizzle: {
       const ValVariant Val2 = StackMgr.pop();
       ValVariant &Val1 = StackMgr.getTop();
@@ -969,6 +1075,7 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
       Vector = detail::vectorSelect(Exceed, Zero, Result);
       return {};
     }
+#endif // MSVC
     case OpCode::I8x16__splat:
       return runSplatOp<uint32_t, uint8_t>(StackMgr.getTop());
     case OpCode::I16x8__splat:
@@ -1175,39 +1282,72 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
     }
 
     case OpCode::V128__not: {
-      auto &Val = StackMgr.getTop().get<uint64x2_t>();
+      auto &Val = StackMgr.getTop().get<uint128_t>();
       Val = ~Val;
       return {};
     }
     case OpCode::V128__and: {
       const ValVariant Val2 = StackMgr.pop();
       ValVariant &Val1 = StackMgr.getTop();
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+      auto &Result = Val1.get<uint64x2_t>();
+      auto &Vector = Val2.get<uint64x2_t>();
+      Result[0] &= Vector[0];
+      Result[1] &= Vector[1];
+#else
       Val1.get<uint64x2_t>() &= Val2.get<uint64x2_t>();
+#endif // MSVC
       return {};
     }
     case OpCode::V128__andnot: {
       const ValVariant Val2 = StackMgr.pop();
       ValVariant &Val1 = StackMgr.getTop();
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+      auto &Result = Val1.get<uint64x2_t>();
+      auto &Vector = Val2.get<uint64x2_t>();
+      Result[0] &= ~Vector[0];
+      Result[1] &= ~Vector[1];
+#else
       Val1.get<uint64x2_t>() &= ~Val2.get<uint64x2_t>();
+#endif // MSVC
       return {};
     }
     case OpCode::V128__or: {
       const ValVariant Val2 = StackMgr.pop();
       ValVariant &Val1 = StackMgr.getTop();
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+      auto &Result = Val1.get<uint64x2_t>();
+      auto &Vector = Val2.get<uint64x2_t>();
+      Result[0] |= Vector[0];
+      Result[1] |= Vector[1];
+#else
       Val1.get<uint64x2_t>() |= Val2.get<uint64x2_t>();
+#endif // MSVC
       return {};
     }
     case OpCode::V128__xor: {
       const ValVariant Val2 = StackMgr.pop();
       ValVariant &Val1 = StackMgr.getTop();
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+      auto &Result = Val1.get<uint64x2_t>();
+      auto &Vector = Val2.get<uint64x2_t>();
+      Result[0] ^= Vector[0];
+      Result[1] ^= Vector[1];
+#else
       Val1.get<uint64x2_t>() ^= Val2.get<uint64x2_t>();
+#endif // MSVC
       return {};
     }
     case OpCode::V128__bitselect: {
       const uint64x2_t C = StackMgr.pop().get<uint64x2_t>();
       const uint64x2_t Val2 = StackMgr.pop().get<uint64x2_t>();
       uint64x2_t &Val1 = StackMgr.getTop().get<uint64x2_t>();
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+      Val1[0] = (Val1[0] & C[0]) | (Val2[0] & ~C[0]);
+      Val1[1] = (Val1[1] & C[1]) | (Val2[1] & ~C[1]);
+#else
       Val1 = (Val1 & C) | (Val2 & ~C);
+#endif // MSVC
       return {};
     }
     case OpCode::V128__any_true:
@@ -1630,6 +1770,28 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
     case OpCode::F64x2__promote_low_f32x4:
       return runVectorPromoteOp(StackMgr.getTop());
 
+#if defined(_MSC_VER) && !defined(__clang__) // MSVC
+    case OpCode::I32x4__dot_i16x8_s: {
+      using int32x8_t = SIMDArray<int32_t, 32>;
+      const ValVariant Val2 = StackMgr.pop();
+      ValVariant &Val1 = StackMgr.getTop();
+
+      auto &V2 = Val2.get<int16x8_t>();
+      auto &V1 = Val1.get<int16x8_t>();
+      int32x8_t M;
+
+      for (size_t I = 0; I < 8; ++I) {
+        M[I] = V1[I] * V2[I];
+      }
+
+      int32x4_t Result;
+      for (size_t I = 0; I < 4; ++I) {
+        Result[I] = M[I * 2] + M[I * 2 + 1];
+      }
+      Val1.emplace<int32x4_t>(Result);
+      return {};
+    }
+#else
     case OpCode::I32x4__dot_i16x8_s: {
       using int32x8_t [[gnu::vector_size(32)]] = int32_t;
       const ValVariant Val2 = StackMgr.pop();
@@ -1645,6 +1807,7 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
 
       return {};
     }
+#endif // MSVC
     case OpCode::F32x4__ceil:
       return runVectorCeilOp<float>(StackMgr.getTop());
     case OpCode::F32x4__floor:
@@ -1662,14 +1825,218 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
     case OpCode::F64x2__nearest:
       return runVectorNearestOp<double>(StackMgr.getTop());
 
+    // Threads instructions
+    case OpCode::Atomic__fence:
+      return runMemoryFenceOp();
+
+    case OpCode::Memory__atomic__notify:
+      return runAtomicNotifyOp(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::Memory__atomic__wait32:
+      return runAtomicWaitOp<int32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::Memory__atomic__wait64:
+      return runAtomicWaitOp<int64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+
+    case OpCode::I32__atomic__load:
+      return runAtomicLoadOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__load:
+      return runAtomicLoadOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__load8_u:
+      return runAtomicLoadOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__load16_u:
+      return runAtomicLoadOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__load8_u:
+      return runAtomicLoadOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__load16_u:
+      return runAtomicLoadOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__load32_u:
+      return runAtomicLoadOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__store:
+      return runAtomicStoreOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__store:
+      return runAtomicStoreOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__store8:
+      return runAtomicStoreOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__store16:
+      return runAtomicStoreOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__store8:
+      return runAtomicStoreOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__store16:
+      return runAtomicStoreOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__store32:
+      return runAtomicStoreOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__add:
+      return runAtomicAddOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__add:
+      return runAtomicAddOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__add_u:
+      return runAtomicAddOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__add_u:
+      return runAtomicAddOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__add_u:
+      return runAtomicAddOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__add_u:
+      return runAtomicAddOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__add_u:
+      return runAtomicAddOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__sub:
+      return runAtomicSubOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__sub:
+      return runAtomicSubOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__sub_u:
+      return runAtomicSubOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__sub_u:
+      return runAtomicSubOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__sub_u:
+      return runAtomicSubOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__sub_u:
+      return runAtomicSubOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__sub_u:
+      return runAtomicSubOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__and:
+      return runAtomicAndOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__and:
+      return runAtomicAndOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__and_u:
+      return runAtomicAndOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__and_u:
+      return runAtomicAndOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__and_u:
+      return runAtomicAndOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__and_u:
+      return runAtomicAndOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__and_u:
+      return runAtomicAndOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__or:
+      return runAtomicOrOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__or:
+      return runAtomicOrOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__or_u:
+      return runAtomicOrOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__or_u:
+      return runAtomicOrOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__or_u:
+      return runAtomicOrOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__or_u:
+      return runAtomicOrOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__or_u:
+      return runAtomicOrOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__xor:
+      return runAtomicXorOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__xor:
+      return runAtomicXorOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__xor_u:
+      return runAtomicXorOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__xor_u:
+      return runAtomicXorOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__xor_u:
+      return runAtomicXorOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__xor_u:
+      return runAtomicXorOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__xor_u:
+      return runAtomicXorOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__xchg:
+      return runAtomicExchangeOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__xchg:
+      return runAtomicExchangeOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__xchg_u:
+      return runAtomicExchangeOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__xchg_u:
+      return runAtomicExchangeOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__xchg_u:
+      return runAtomicExchangeOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__xchg_u:
+      return runAtomicExchangeOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__xchg_u:
+      return runAtomicExchangeOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw__cmpxchg:
+      return runAtomicCompareExchangeOp<int32_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw__cmpxchg:
+      return runAtomicCompareExchangeOp<int64_t, uint64_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw8__cmpxchg_u:
+      return runAtomicCompareExchangeOp<uint32_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I32__atomic__rmw16__cmpxchg_u:
+      return runAtomicCompareExchangeOp<uint32_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw8__cmpxchg_u:
+      return runAtomicCompareExchangeOp<uint64_t, uint8_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw16__cmpxchg_u:
+      return runAtomicCompareExchangeOp<uint64_t, uint16_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+    case OpCode::I64__atomic__rmw32__cmpxchg_u:
+      return runAtomicCompareExchangeOp<uint64_t, uint32_t>(
+          StackMgr, *getMemInstByIdx(StackMgr, Instr.getTargetIndex()), Instr);
+
     default:
       return {};
     }
   };
 
   while (PC != PCEnd) {
-    OpCode Code = PC->getOpCode();
     if (Stat) {
+      OpCode Code = PC->getOpCode();
       if (Conf.getStatisticsConfigure().isInstructionCounting()) {
         Stat->incInstrCount();
       }
@@ -1679,7 +2046,7 @@ Expect<void> Executor::execute(Runtime::StoreManager &StoreMgr,
           const AST::Instruction &Instr = *PC;
           spdlog::error(
               ErrInfo::InfoInstruction(Instr.getOpCode(), Instr.getOffset()));
-          return Unexpect(ErrCode::CostLimitExceeded);
+          return Unexpect(ErrCode::Value::CostLimitExceeded);
         }
       }
     }

@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 // SPDX-FileCopyrightText: 2019-2022 Second State INC
 
+#include "common/filesystem.h"
 #include "wasmedge/wasmedge.h"
 
 #include <cstdint>
+#include <fstream>
 #include <gtest/gtest.h>
 #include <iostream>
 #include <map>
@@ -12,9 +14,116 @@
 #include <utility>
 #include <vector>
 
+
 namespace {
 
-// The followings are the functions and class definitions to pass as
+std::vector<uint8_t> FuncsWasm = {
+    0x0,  0x61, 0x73, 0x6d, 0x1,  0x0,  0x0,  0x0,  0x1,  0x16, 0x3,  0x60,
+    0x2,  0x6f, 0x7f, 0x1,  0x7f, 0x60, 0x3,  0x6f, 0x7f, 0x7f, 0x1,  0x7f,
+    0x60, 0x4,  0x6f, 0x6f, 0x7f, 0x7f, 0x1,  0x7f, 0x2,  0x53, 0x3,  0xd,
+    0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c,
+    0x65, 0xe,  0x66, 0x75, 0x6e, 0x63, 0x74, 0x6f, 0x72, 0x5f, 0x73, 0x71,
+    0x75, 0x61, 0x72, 0x65, 0x0,  0x0,  0xd,  0x65, 0x78, 0x74, 0x65, 0x72,
+    0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x9,  0x63, 0x6c, 0x61,
+    0x73, 0x73, 0x5f, 0x61, 0x64, 0x64, 0x0,  0x1,  0xd,  0x65, 0x78, 0x74,
+    0x65, 0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0x8,  0x66,
+    0x75, 0x6e, 0x63, 0x5f, 0x6d, 0x75, 0x6c, 0x0,  0x1,  0x3,  0x5,  0x4,
+    0x1,  0x1,  0x0,  0x2,  0x5,  0x3,  0x1,  0x0,  0x1,  0x7,  0x40, 0x5,
+    0x6,  0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x2,  0x0,  0x8,  0x63, 0x61,
+    0x6c, 0x6c, 0x5f, 0x61, 0x64, 0x64, 0x0,  0x3,  0x8,  0x63, 0x61, 0x6c,
+    0x6c, 0x5f, 0x6d, 0x75, 0x6c, 0x0,  0x4,  0xb,  0x63, 0x61, 0x6c, 0x6c,
+    0x5f, 0x73, 0x71, 0x75, 0x61, 0x72, 0x65, 0x0,  0x5,  0xf,  0x63, 0x61,
+    0x6c, 0x6c, 0x5f, 0x61, 0x64, 0x64, 0x5f, 0x73, 0x71, 0x75, 0x61, 0x72,
+    0x65, 0x0,  0x6,  0xa,  0x2f, 0x4,  0xa,  0x0,  0x20, 0x0,  0x20, 0x1,
+    0x20, 0x2,  0x10, 0x1,  0xb,  0xa,  0x0,  0x20, 0x0,  0x20, 0x1,  0x20,
+    0x2,  0x10, 0x2,  0xb,  0x8,  0x0,  0x20, 0x0,  0x20, 0x1,  0x10, 0x0,
+    0xb,  0xe,  0x0,  0x20, 0x1,  0x20, 0x0,  0x20, 0x2,  0x20, 0x3,  0x10,
+    0x1,  0x10, 0x0,  0xb,  0x0,  0x66, 0x4,  0x6e, 0x61, 0x6d, 0x65, 0x1,
+    0x26, 0x3,  0x0,  0xe,  0x66, 0x75, 0x6e, 0x63, 0x74, 0x6f, 0x72, 0x5f,
+    0x73, 0x71, 0x75, 0x61, 0x72, 0x65, 0x1,  0x9,  0x63, 0x6c, 0x61, 0x73,
+    0x73, 0x5f, 0x61, 0x64, 0x64, 0x2,  0x8,  0x66, 0x75, 0x6e, 0x63, 0x5f,
+    0x6d, 0x75, 0x6c, 0x2,  0x37, 0x7,  0x0,  0x2,  0x0,  0x0,  0x1,  0x0,
+    0x1,  0x3,  0x0,  0x0,  0x1,  0x0,  0x2,  0x0,  0x2,  0x3,  0x0,  0x0,
+    0x1,  0x0,  0x2,  0x0,  0x3,  0x3,  0x0,  0x0,  0x1,  0x0,  0x2,  0x0,
+    0x4,  0x3,  0x0,  0x0,  0x1,  0x0,  0x2,  0x0,  0x5,  0x2,  0x0,  0x0,
+    0x1,  0x0,  0x6,  0x4,  0x0,  0x0,  0x1,  0x0,  0x2,  0x0,  0x3,  0x0};
+std::vector<uint8_t> STLWasm = {
+    0x0,  0x61, 0x73, 0x6d, 0x1,  0x0,  0x0,  0x0,  0x1,  0x17, 0x4,  0x60,
+    0x2,  0x6f, 0x6f, 0x0,  0x60, 0x2,  0x6f, 0x7f, 0x0,  0x60, 0x3,  0x6f,
+    0x6f, 0x6f, 0x0,  0x60, 0x2,  0x6f, 0x6f, 0x1,  0x7f, 0x2,  0xfa, 0x1,
+    0x8,  0xd,  0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64,
+    0x75, 0x6c, 0x65, 0xf,  0x73, 0x74, 0x6c, 0x5f, 0x6f, 0x73, 0x74, 0x72,
+    0x65, 0x61, 0x6d, 0x5f, 0x73, 0x74, 0x72, 0x0,  0x0,  0xd,  0x65, 0x78,
+    0x74, 0x65, 0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0xf,
+    0x73, 0x74, 0x6c, 0x5f, 0x6f, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x5f,
+    0x75, 0x33, 0x32, 0x0,  0x1,  0xd,  0x65, 0x78, 0x74, 0x65, 0x72, 0x6e,
+    0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0xe,  0x73, 0x74, 0x6c, 0x5f,
+    0x6d, 0x61, 0x70, 0x5f, 0x69, 0x6e, 0x73, 0x65, 0x72, 0x74, 0x0,  0x2,
+    0xd,  0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75,
+    0x6c, 0x65, 0xd,  0x73, 0x74, 0x6c, 0x5f, 0x6d, 0x61, 0x70, 0x5f, 0x65,
+    0x72, 0x61, 0x73, 0x65, 0x0,  0x0,  0xd,  0x65, 0x78, 0x74, 0x65, 0x72,
+    0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0xe,  0x73, 0x74, 0x6c,
+    0x5f, 0x73, 0x65, 0x74, 0x5f, 0x69, 0x6e, 0x73, 0x65, 0x72, 0x74, 0x0,
+    0x1,  0xd,  0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64,
+    0x75, 0x6c, 0x65, 0xd,  0x73, 0x74, 0x6c, 0x5f, 0x73, 0x65, 0x74, 0x5f,
+    0x65, 0x72, 0x61, 0x73, 0x65, 0x0,  0x1,  0xd,  0x65, 0x78, 0x74, 0x65,
+    0x72, 0x6e, 0x5f, 0x6d, 0x6f, 0x64, 0x75, 0x6c, 0x65, 0xf,  0x73, 0x74,
+    0x6c, 0x5f, 0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x5f, 0x70, 0x75, 0x73,
+    0x68, 0x0,  0x1,  0xd,  0x65, 0x78, 0x74, 0x65, 0x72, 0x6e, 0x5f, 0x6d,
+    0x6f, 0x64, 0x75, 0x6c, 0x65, 0xe,  0x73, 0x74, 0x6c, 0x5f, 0x76, 0x65,
+    0x63, 0x74, 0x6f, 0x72, 0x5f, 0x73, 0x75, 0x6d, 0x0,  0x3,  0x3,  0x9,
+    0x8,  0x0,  0x1,  0x2,  0x0,  0x1,  0x1,  0x1,  0x3,  0x5,  0x3,  0x1,
+    0x0,  0x1,  0x7,  0x9b, 0x1,  0x9,  0x6,  0x6d, 0x65, 0x6d, 0x6f, 0x72,
+    0x79, 0x2,  0x0,  0x10, 0x63, 0x61, 0x6c, 0x6c, 0x5f, 0x6f, 0x73, 0x74,
+    0x72, 0x65, 0x61, 0x6d, 0x5f, 0x73, 0x74, 0x72, 0x0,  0x8,  0x10, 0x63,
+    0x61, 0x6c, 0x6c, 0x5f, 0x6f, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x5f,
+    0x75, 0x33, 0x32, 0x0,  0x9,  0xf,  0x63, 0x61, 0x6c, 0x6c, 0x5f, 0x6d,
+    0x61, 0x70, 0x5f, 0x69, 0x6e, 0x73, 0x65, 0x72, 0x74, 0x0,  0xa,  0xe,
+    0x63, 0x61, 0x6c, 0x6c, 0x5f, 0x6d, 0x61, 0x70, 0x5f, 0x65, 0x72, 0x61,
+    0x73, 0x65, 0x0,  0xb,  0xf,  0x63, 0x61, 0x6c, 0x6c, 0x5f, 0x73, 0x65,
+    0x74, 0x5f, 0x69, 0x6e, 0x73, 0x65, 0x72, 0x74, 0x0,  0xc,  0xe,  0x63,
+    0x61, 0x6c, 0x6c, 0x5f, 0x73, 0x65, 0x74, 0x5f, 0x65, 0x72, 0x61, 0x73,
+    0x65, 0x0,  0xd,  0x10, 0x63, 0x61, 0x6c, 0x6c, 0x5f, 0x76, 0x65, 0x63,
+    0x74, 0x6f, 0x72, 0x5f, 0x70, 0x75, 0x73, 0x68, 0x0,  0xe,  0xf,  0x63,
+    0x61, 0x6c, 0x6c, 0x5f, 0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x5f, 0x73,
+    0x75, 0x6d, 0x0,  0xf,  0xa,  0x4b, 0x8,  0x8,  0x0,  0x20, 0x0,  0x20,
+    0x1,  0x10, 0x0,  0xb,  0x8,  0x0,  0x20, 0x0,  0x20, 0x1,  0x10, 0x1,
+    0xb,  0xa,  0x0,  0x20, 0x0,  0x20, 0x1,  0x20, 0x2,  0x10, 0x2,  0xb,
+    0x8,  0x0,  0x20, 0x0,  0x20, 0x1,  0x10, 0x3,  0xb,  0x8,  0x0,  0x20,
+    0x0,  0x20, 0x1,  0x10, 0x4,  0xb,  0x8,  0x0,  0x20, 0x0,  0x20, 0x1,
+    0x10, 0x5,  0xb,  0x8,  0x0,  0x20, 0x0,  0x20, 0x1,  0x10, 0x6,  0xb,
+    0x8,  0x0,  0x20, 0x0,  0x20, 0x1,  0x10, 0x7,  0xb,  0x0,  0xf1, 0x1,
+    0x4,  0x6e, 0x61, 0x6d, 0x65, 0x1,  0x82, 0x1,  0x8,  0x0,  0xf,  0x73,
+    0x74, 0x6c, 0x5f, 0x6f, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x5f, 0x73,
+    0x74, 0x72, 0x1,  0xf,  0x73, 0x74, 0x6c, 0x5f, 0x6f, 0x73, 0x74, 0x72,
+    0x65, 0x61, 0x6d, 0x5f, 0x75, 0x33, 0x32, 0x2,  0xe,  0x73, 0x74, 0x6c,
+    0x5f, 0x6d, 0x61, 0x70, 0x5f, 0x69, 0x6e, 0x73, 0x65, 0x72, 0x74, 0x3,
+    0xd,  0x73, 0x74, 0x6c, 0x5f, 0x6d, 0x61, 0x70, 0x5f, 0x65, 0x72, 0x61,
+    0x73, 0x65, 0x4,  0xe,  0x73, 0x74, 0x6c, 0x5f, 0x73, 0x65, 0x74, 0x5f,
+    0x69, 0x6e, 0x73, 0x65, 0x72, 0x74, 0x5,  0xd,  0x73, 0x74, 0x6c, 0x5f,
+    0x73, 0x65, 0x74, 0x5f, 0x65, 0x72, 0x61, 0x73, 0x65, 0x6,  0xf,  0x73,
+    0x74, 0x6c, 0x5f, 0x76, 0x65, 0x63, 0x74, 0x6f, 0x72, 0x5f, 0x70, 0x75,
+    0x73, 0x68, 0x7,  0xe,  0x73, 0x74, 0x6c, 0x5f, 0x76, 0x65, 0x63, 0x74,
+    0x6f, 0x72, 0x5f, 0x73, 0x75, 0x6d, 0x2,  0x65, 0x10, 0x0,  0x2,  0x0,
+    0x0,  0x1,  0x0,  0x1,  0x2,  0x0,  0x0,  0x1,  0x0,  0x2,  0x3,  0x0,
+    0x0,  0x1,  0x0,  0x2,  0x0,  0x3,  0x2,  0x0,  0x0,  0x1,  0x0,  0x4,
+    0x2,  0x0,  0x0,  0x1,  0x0,  0x5,  0x2,  0x0,  0x0,  0x1,  0x0,  0x6,
+    0x2,  0x0,  0x0,  0x1,  0x0,  0x7,  0x2,  0x0,  0x0,  0x1,  0x0,  0x8,
+    0x2,  0x0,  0x0,  0x1,  0x0,  0x9,  0x2,  0x0,  0x0,  0x1,  0x0,  0xa,
+    0x3,  0x0,  0x0,  0x1,  0x0,  0x2,  0x0,  0xb,  0x2,  0x0,  0x0,  0x1,
+    0x0,  0xc,  0x2,  0x0,  0x0,  0x1,  0x0,  0xd,  0x2,  0x0,  0x0,  0x1,
+    0x0,  0xe,  0x2,  0x0,  0x0,  0x1,  0x0,  0xf,  0x2,  0x0,  0x0,  0x1,
+    0x0};
+
+void HexToFile(std::vector<uint8_t> &Wasm, const char *Path) {
+  std::ofstream TFile(std::filesystem::u8path(Path), std::ios_base::binary);
+  for (auto &Hex : Wasm) {
+    TFile << Hex;
+  }
+  TFile.close();
+}
+
+// The following are the functions and class definitions to pass as
 // references.
 
 // Test: function to pass as function pointer
@@ -31,10 +140,11 @@ struct SquareStruct {
   uint32_t operator()(uint32_t Val) const { return Val * Val; }
 };
 
-// The followings are the host function definitions.
+// The following are the host function definitions.
 
 // Host function to call functor by external reference
-WasmEdge_Result ExternFunctorSquare(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternFunctorSquare(void *,
+                                    const WasmEdge_CallingFrameContext *,
                                     const WasmEdge_Value *In,
                                     WasmEdge_Value *Out) {
   // Function type: {externref, i32} -> {i32}
@@ -46,7 +156,7 @@ WasmEdge_Result ExternFunctorSquare(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to access class by external reference
-WasmEdge_Result ExternClassAdd(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternClassAdd(void *, const WasmEdge_CallingFrameContext *,
                                const WasmEdge_Value *In, WasmEdge_Value *Out) {
   // Function type: {externref, i32, i32} -> {i32}
   void *Ptr = WasmEdge_ValueGetExternRef(In[0]);
@@ -58,7 +168,7 @@ WasmEdge_Result ExternClassAdd(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to call function by external reference as a function pointer
-WasmEdge_Result ExternFuncMul(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternFuncMul(void *, const WasmEdge_CallingFrameContext *,
                               const WasmEdge_Value *In, WasmEdge_Value *Out) {
   // Function type: {externref, i32, i32} -> {i32}
   void *Ptr = WasmEdge_ValueGetExternRef(In[0]);
@@ -71,7 +181,8 @@ WasmEdge_Result ExternFuncMul(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to output std::string through std::ostream
-WasmEdge_Result ExternSTLOStreamStr(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLOStreamStr(void *,
+                                    const WasmEdge_CallingFrameContext *,
                                     const WasmEdge_Value *In,
                                     WasmEdge_Value *) {
   // Function type: {externref, externref} -> {}
@@ -84,7 +195,8 @@ WasmEdge_Result ExternSTLOStreamStr(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to output uint32_t through std::ostream
-WasmEdge_Result ExternSTLOStreamU32(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLOStreamU32(void *,
+                                    const WasmEdge_CallingFrameContext *,
                                     const WasmEdge_Value *In,
                                     WasmEdge_Value *) {
   // Function type: {externref, i32} -> {}
@@ -95,7 +207,7 @@ WasmEdge_Result ExternSTLOStreamU32(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to insert {key, val} to std::map<std::string, std::string>
-WasmEdge_Result ExternSTLMapInsert(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLMapInsert(void *, const WasmEdge_CallingFrameContext *,
                                    const WasmEdge_Value *In, WasmEdge_Value *) {
   // Function type: {externref, externref, externref} -> {}
   void *Ptr0 = WasmEdge_ValueGetExternRef(In[0]);
@@ -109,7 +221,7 @@ WasmEdge_Result ExternSTLMapInsert(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to erase std::map<std::string, std::string> with key
-WasmEdge_Result ExternSTLMapErase(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLMapErase(void *, const WasmEdge_CallingFrameContext *,
                                   const WasmEdge_Value *In, WasmEdge_Value *) {
   // Function type: {externref, externref} -> {}
   void *Ptr0 = WasmEdge_ValueGetExternRef(In[0]);
@@ -121,7 +233,7 @@ WasmEdge_Result ExternSTLMapErase(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to insert key to std::set<uint32_t>
-WasmEdge_Result ExternSTLSetInsert(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLSetInsert(void *, const WasmEdge_CallingFrameContext *,
                                    const WasmEdge_Value *In, WasmEdge_Value *) {
   // Function type: {externref, i32} -> {}
   void *Ptr = WasmEdge_ValueGetExternRef(In[0]);
@@ -131,7 +243,7 @@ WasmEdge_Result ExternSTLSetInsert(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to erase std::set<uint32_t> with key
-WasmEdge_Result ExternSTLSetErase(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLSetErase(void *, const WasmEdge_CallingFrameContext *,
                                   const WasmEdge_Value *In, WasmEdge_Value *) {
   // Function type: {externref, i32} -> {}
   void *Ptr = WasmEdge_ValueGetExternRef(In[0]);
@@ -141,7 +253,8 @@ WasmEdge_Result ExternSTLSetErase(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to push value into std::vector<uint32_t>
-WasmEdge_Result ExternSTLVectorPush(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLVectorPush(void *,
+                                    const WasmEdge_CallingFrameContext *,
                                     const WasmEdge_Value *In,
                                     WasmEdge_Value *) {
   // Function type: {externref, i32} -> {}
@@ -152,7 +265,7 @@ WasmEdge_Result ExternSTLVectorPush(void *, WasmEdge_MemoryInstanceContext *,
 }
 
 // Host function to summarize value in slice of std::vector<uint32_t>
-WasmEdge_Result ExternSTLVectorSum(void *, WasmEdge_MemoryInstanceContext *,
+WasmEdge_Result ExternSTLVectorSum(void *, const WasmEdge_CallingFrameContext *,
                                    const WasmEdge_Value *In,
                                    WasmEdge_Value *Out) {
   // Function type: {externref, externref} -> {i32}
@@ -169,37 +282,38 @@ WasmEdge_Result ExternSTLVectorSum(void *, WasmEdge_MemoryInstanceContext *,
   return WasmEdge_Result_Success;
 }
 
-// Helper function to create the "extern_module" import object.
-WasmEdge_ImportObjectContext *createExternModule() {
+// Helper function to create the "extern_module" module instance.
+WasmEdge_ModuleInstanceContext *createExternModule() {
   WasmEdge_String HostName;
   WasmEdge_FunctionTypeContext *HostFType = nullptr;
   WasmEdge_FunctionInstanceContext *HostFunc = nullptr;
-  enum WasmEdge_ValType P[3], R[1];
+  WasmEdge_ValType P[3], R[1];
 
   HostName = WasmEdge_StringCreateByCString("extern_module");
-  WasmEdge_ImportObjectContext *ImpObj = WasmEdge_ImportObjectCreate(HostName);
+  WasmEdge_ModuleInstanceContext *HostMod =
+      WasmEdge_ModuleInstanceCreate(HostName);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "functor_square": {externref, i32} -> {i32}
-  P[0] = WasmEdge_ValType_ExternRef;
-  P[1] = WasmEdge_ValType_I32;
-  R[0] = WasmEdge_ValType_I32;
+  P[0] = WasmEdge_ValTypeGenExternRef();
+  P[1] = WasmEdge_ValTypeGenI32();
+  R[0] = WasmEdge_ValTypeGenI32();
   HostFType = WasmEdge_FunctionTypeCreate(P, 2, R, 1);
   HostFunc = WasmEdge_FunctionInstanceCreate(HostFType, ExternFunctorSquare,
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("functor_square");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "class_add": {externref, i32, i32} -> {i32}
-  P[2] = WasmEdge_ValType_I32;
+  P[2] = WasmEdge_ValTypeGenI32();
   HostFType = WasmEdge_FunctionTypeCreate(P, 3, R, 1);
   HostFunc =
       WasmEdge_FunctionInstanceCreate(HostFType, ExternClassAdd, nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("class_add");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "func_mul": {externref, i32, i32} -> {i32}
@@ -208,38 +322,38 @@ WasmEdge_ImportObjectContext *createExternModule() {
       WasmEdge_FunctionInstanceCreate(HostFType, ExternFuncMul, nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("func_mul");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_ostream_str": {externref, externref} -> {}
-  P[1] = WasmEdge_ValType_ExternRef;
+  P[1] = WasmEdge_ValTypeGenExternRef();
   HostFType = WasmEdge_FunctionTypeCreate(P, 2, nullptr, 0);
   HostFunc = WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLOStreamStr,
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_ostream_str");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_ostream_u32": {externref, i32} -> {}
-  P[1] = WasmEdge_ValType_I32;
+  P[1] = WasmEdge_ValTypeGenI32();
   HostFType = WasmEdge_FunctionTypeCreate(P, 2, nullptr, 0);
   HostFunc = WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLOStreamU32,
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_ostream_u32");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_map_insert": {externref, externref, externref}->{}
-  P[1] = WasmEdge_ValType_ExternRef;
-  P[2] = WasmEdge_ValType_ExternRef;
+  P[1] = WasmEdge_ValTypeGenExternRef();
+  P[2] = WasmEdge_ValTypeGenExternRef();
   HostFType = WasmEdge_FunctionTypeCreate(P, 3, nullptr, 0);
   HostFunc = WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLMapInsert,
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_map_insert");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_map_erase": {externref, externref}->{}
@@ -248,17 +362,17 @@ WasmEdge_ImportObjectContext *createExternModule() {
       WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLMapErase, nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_map_erase");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_set_insert": {externref, i32}->{}
-  P[1] = WasmEdge_ValType_I32;
+  P[1] = WasmEdge_ValTypeGenI32();
   HostFType = WasmEdge_FunctionTypeCreate(P, 2, nullptr, 0);
   HostFunc = WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLSetInsert,
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_set_insert");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_set_erase": {externref, i32}->{}
@@ -267,7 +381,7 @@ WasmEdge_ImportObjectContext *createExternModule() {
       WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLSetErase, nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_set_erase");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_vector_push": {externref, i32}->{}
@@ -276,32 +390,33 @@ WasmEdge_ImportObjectContext *createExternModule() {
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_vector_push");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
   // Add host function "stl_vector_sum": {externref, externref} -> {i32}
-  P[1] = WasmEdge_ValType_ExternRef;
+  P[1] = WasmEdge_ValTypeGenExternRef();
   HostFType = WasmEdge_FunctionTypeCreate(P, 2, R, 1);
   HostFunc = WasmEdge_FunctionInstanceCreate(HostFType, ExternSTLVectorSum,
                                              nullptr, 0);
   WasmEdge_FunctionTypeDelete(HostFType);
   HostName = WasmEdge_StringCreateByCString("stl_vector_sum");
-  WasmEdge_ImportObjectAddFunction(ImpObj, HostName, HostFunc);
+  WasmEdge_ModuleInstanceAddFunction(HostMod, HostName, HostFunc);
   WasmEdge_StringDelete(HostName);
 
-  return ImpObj;
+  return HostMod;
 }
 
 TEST(ExternRefTest, Ref__Functions) {
   WasmEdge_VMContext *VMCxt = WasmEdge_VMCreate(nullptr, nullptr);
-  WasmEdge_ImportObjectContext *ImpObj = createExternModule();
+  WasmEdge_ModuleInstanceContext *HostMod = createExternModule();
   WasmEdge_Value P[4], R[1];
   WasmEdge_String FuncName;
 
   EXPECT_TRUE(
-      WasmEdge_ResultOK(WasmEdge_VMRegisterModuleFromImport(VMCxt, ImpObj)));
-  EXPECT_TRUE(WasmEdge_ResultOK(
-      WasmEdge_VMLoadWasmFromFile(VMCxt, "externrefTestData/funcs.wasm")));
+      WasmEdge_ResultOK(WasmEdge_VMRegisterModuleFromImport(VMCxt, HostMod)));
+  char FuncsPath[] = "externrefTestData/funcs.wasm";
+  HexToFile(FuncsWasm, FuncsPath);
+  EXPECT_TRUE(WasmEdge_ResultOK(WasmEdge_VMLoadWasmFromFile(VMCxt, FuncsPath)));
   EXPECT_TRUE(WasmEdge_ResultOK(WasmEdge_VMValidate(VMCxt)));
   EXPECT_TRUE(WasmEdge_ResultOK(WasmEdge_VMInstantiate(VMCxt)));
 
@@ -318,7 +433,7 @@ TEST(ExternRefTest, Ref__Functions) {
   EXPECT_TRUE(
       WasmEdge_ResultOK(WasmEdge_VMExecute(VMCxt, FuncName, P, 3, R, 1)));
   WasmEdge_StringDelete(FuncName);
-  EXPECT_EQ(R[0].Type, WasmEdge_ValType_I32);
+  EXPECT_TRUE(WasmEdge_ValTypeIsI32(R[0].Type));
   EXPECT_EQ(WasmEdge_ValueGetI32(R[0]), 6912);
 
   // Test 2: call mul -- 789 * 4321
@@ -329,7 +444,7 @@ TEST(ExternRefTest, Ref__Functions) {
   EXPECT_TRUE(
       WasmEdge_ResultOK(WasmEdge_VMExecute(VMCxt, FuncName, P, 3, R, 1)));
   WasmEdge_StringDelete(FuncName);
-  EXPECT_EQ(R[0].Type, WasmEdge_ValType_I32);
+  EXPECT_TRUE(WasmEdge_ValTypeIsI32(R[0].Type));
   EXPECT_EQ(WasmEdge_ValueGetI32(R[0]), 3409269);
 
   // Test 3: call square -- 8256^2
@@ -339,7 +454,7 @@ TEST(ExternRefTest, Ref__Functions) {
   EXPECT_TRUE(
       WasmEdge_ResultOK(WasmEdge_VMExecute(VMCxt, FuncName, P, 2, R, 1)));
   WasmEdge_StringDelete(FuncName);
-  EXPECT_EQ(R[0].Type, WasmEdge_ValType_I32);
+  EXPECT_TRUE(WasmEdge_ValTypeIsI32(R[0].Type));
   EXPECT_EQ(WasmEdge_ValueGetI32(R[0]), 68161536);
 
   // Test 4: call sum and square -- (210 + 654)^2
@@ -351,23 +466,24 @@ TEST(ExternRefTest, Ref__Functions) {
   EXPECT_TRUE(
       WasmEdge_ResultOK(WasmEdge_VMExecute(VMCxt, FuncName, P, 4, R, 1)));
   WasmEdge_StringDelete(FuncName);
-  EXPECT_EQ(R[0].Type, WasmEdge_ValType_I32);
+  EXPECT_TRUE(WasmEdge_ValTypeIsI32(R[0].Type));
   EXPECT_EQ(WasmEdge_ValueGetI32(R[0]), 746496);
 
   WasmEdge_VMDelete(VMCxt);
-  WasmEdge_ImportObjectDelete(ImpObj);
+  WasmEdge_ModuleInstanceDelete(HostMod);
 }
 
 TEST(ExternRefTest, Ref__STL) {
   WasmEdge_VMContext *VMCxt = WasmEdge_VMCreate(nullptr, nullptr);
-  WasmEdge_ImportObjectContext *ImpObj = createExternModule();
+  WasmEdge_ModuleInstanceContext *HostMod = createExternModule();
   WasmEdge_Value P[3], R[1];
   WasmEdge_String FuncName;
 
   EXPECT_TRUE(
-      WasmEdge_ResultOK(WasmEdge_VMRegisterModuleFromImport(VMCxt, ImpObj)));
-  EXPECT_TRUE(WasmEdge_ResultOK(
-      WasmEdge_VMLoadWasmFromFile(VMCxt, "externrefTestData/stl.wasm")));
+      WasmEdge_ResultOK(WasmEdge_VMRegisterModuleFromImport(VMCxt, HostMod)));
+  char STLPath[] = "externrefTestData/stl.wasm";
+  HexToFile(STLWasm, STLPath);
+  EXPECT_TRUE(WasmEdge_ResultOK(WasmEdge_VMLoadWasmFromFile(VMCxt, STLPath)));
   EXPECT_TRUE(WasmEdge_ResultOK(WasmEdge_VMValidate(VMCxt)));
   EXPECT_TRUE(WasmEdge_ResultOK(WasmEdge_VMInstantiate(VMCxt)));
 
@@ -460,11 +576,11 @@ TEST(ExternRefTest, Ref__STL) {
   EXPECT_TRUE(
       WasmEdge_ResultOK(WasmEdge_VMExecute(VMCxt, FuncName, P, 2, R, 1)));
   WasmEdge_StringDelete(FuncName);
-  EXPECT_EQ(R[0].Type, WasmEdge_ValType_I32);
+  EXPECT_TRUE(WasmEdge_ValTypeIsI32(R[0].Type));
   EXPECT_EQ(WasmEdge_ValueGetI32(R[0]), 40 + 50 + 60 + 70 + 80);
 
   WasmEdge_VMDelete(VMCxt);
-  WasmEdge_ImportObjectDelete(ImpObj);
+  WasmEdge_ModuleInstanceDelete(HostMod);
 }
 
 } // namespace

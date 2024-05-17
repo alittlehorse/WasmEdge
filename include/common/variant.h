@@ -35,9 +35,7 @@ union VariadicUnion<FirstT, RestT...> {
 
   template <typename... Args>
   constexpr VariadicUnion(std::in_place_index_t<0>, Args &&...Values)
-      : First() {
-    ::new (&First) FirstT(std::forward<Args>(Values)...);
-  }
+      : First(std::forward<Args>(Values)...) {}
 
   template <std::size_t N, typename... Args>
   constexpr VariadicUnion(std::in_place_index_t<N>, Args &&...Values)
@@ -45,28 +43,28 @@ union VariadicUnion<FirstT, RestT...> {
 
   template <typename T> constexpr const T &get() const &noexcept {
     if constexpr (std::is_same_v<T, FirstT>) {
-      return *std::launder(reinterpret_cast<const FirstT *>(&First));
+      return First;
     } else {
       return Rest.template get<T>();
     }
   }
   template <typename T> constexpr T &get() &noexcept {
     if constexpr (std::is_same_v<T, FirstT>) {
-      return *std::launder(reinterpret_cast<FirstT *>(&First));
+      return First;
     } else {
       return Rest.template get<T>();
     }
   }
   template <typename T> constexpr const T &&get() const &&noexcept {
     if constexpr (std::is_same_v<T, FirstT>) {
-      return std::move(*std::launder(reinterpret_cast<const FirstT *>(&First)));
+      return std::move(First);
     } else {
       return std::move(Rest).template get<T>();
     }
   }
   template <typename T> constexpr T &&get() &&noexcept {
     if constexpr (std::is_same_v<T, FirstT>) {
-      return std::move(*std::launder(reinterpret_cast<FirstT *>(&First)));
+      return std::move(First);
     } else {
       return std::move(Rest).template get<T>();
     }
@@ -76,7 +74,7 @@ union VariadicUnion<FirstT, RestT...> {
   constexpr T &emplace(Args &&...Values) &noexcept {
     if constexpr (std::is_same_v<T, FirstT>) {
       ::new (&First) FirstT(std::forward<Args>(Values)...);
-      return *std::launder(reinterpret_cast<FirstT *>(&First));
+      return *std::launder(&First);
     } else {
       return Rest.template emplace<T>(std::forward<Args>(Values)...);
     }
@@ -86,19 +84,21 @@ union VariadicUnion<FirstT, RestT...> {
   constexpr T &emplace(Args &&...Values) &&noexcept {
     if constexpr (std::is_same_v<T, FirstT>) {
       ::new (&First) FirstT(std::forward<Args>(Values)...);
-      return std::move(*std::launder(reinterpret_cast<FirstT *>(&First)));
+      return std::move(*std::launder(&First));
     } else {
       return std::move(Rest).template emplace<T>(std::forward<Args>(Values)...);
     }
   }
 
-  std::aligned_storage_t<sizeof(FirstT), alignof(FirstT)> First;
+  FirstT First;
   VariadicUnion<RestT...> Rest;
 };
 
 namespace detail {
 
-template <typename T> struct tag { using type = T; };
+template <typename T> struct tag {
+  using type = T;
+};
 
 template <typename T>
 using remove_cvref_t = std::remove_cv_t<std::remove_reference_t<T>>;
@@ -132,7 +132,9 @@ struct biggest_type<FirstT, RestT...> {
   using type = typename std::conditional_t<sizeof(rest_type) <= sizeof(FirstT),
                                            FirstT, rest_type>;
 };
-template <typename FirstT> struct biggest_type<FirstT> { using type = FirstT; };
+template <typename FirstT> struct biggest_type<FirstT> {
+  using type = FirstT;
+};
 
 } // namespace detail
 
@@ -152,8 +154,8 @@ template <typename... Types> class Variant {
   static constexpr bool not_self =
       !std::is_same_v<detail::remove_cvref_t<T>, Variant>;
   template <typename T>
-  static constexpr bool
-      accept_type = (std::is_same_v<detail::remove_cvref_t<T>, Types> || ...);
+  static constexpr bool accept_type =
+      (std::is_same_v<detail::remove_cvref_t<T>, Types> || ...);
 
   VariadicUnion<Types...> Storage;
 

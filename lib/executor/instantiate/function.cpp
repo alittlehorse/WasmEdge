@@ -10,9 +10,7 @@ namespace WasmEdge {
 namespace Executor {
 
 // Instantiate function instance. See "include/executor/executor.h".
-Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
-                                   Runtime::StackManager &,
-                                   Runtime::Instance::ModuleInstance &ModInst,
+Expect<void> Executor::instantiate(Runtime::Instance::ModuleInstance &ModInst,
                                    const AST::FunctionSection &FuncSec,
                                    const AST::CodeSection &CodeSec) {
 
@@ -20,31 +18,30 @@ Expect<void> Executor::instantiate(Runtime::StoreManager &StoreMgr,
   auto TypeIdxs = FuncSec.getContent();
   auto CodeSegs = CodeSec.getContent();
 
-  // Iterate through code segments to make function instances.
-  for (uint32_t I = 0; I < CodeSegs.size(); ++I) {
-    // Insert function instance to store manager.
-    uint32_t NewFuncInstAddr;
-    auto *FuncType = *ModInst.getFuncType(TypeIdxs[I]);
-    if (InsMode == InstantiateMode::Instantiate) {
-      if (auto Symbol = CodeSegs[I].getSymbol()) {
-        NewFuncInstAddr =
-            StoreMgr.pushFunction(ModInst.Addr, *FuncType, std::move(Symbol));
-      } else {
-        NewFuncInstAddr = StoreMgr.pushFunction(
-            ModInst.Addr, *FuncType, CodeSegs[I].getLocals(),
-            CodeSegs[I].getExpr().getInstrs());
-      }
-    } else {
-      if (auto Symbol = CodeSegs[I].getSymbol()) {
-        NewFuncInstAddr =
-            StoreMgr.importFunction(ModInst.Addr, *FuncType, std::move(Symbol));
-      } else {
-        NewFuncInstAddr = StoreMgr.importFunction(
-            ModInst.Addr, *FuncType, CodeSegs[I].getLocals(),
-            CodeSegs[I].getExpr().getInstrs());
-      }
+  if (CodeSegs.size() == 0) {
+    return {};
+  }
+  // The module will always choose the `for` loop in `else` case under
+  // interpreter mode. Instead, if we do branch in the `for` loop which might
+  // cause meaningless branch misses. Therefore we should check the first item
+  // and dispatch it into different cases to reduce branch misses.
+  if (CodeSegs[0].getSymbol() != false) {
+    for (uint32_t I = 0; I < CodeSegs.size(); ++I) {
+      auto Symbol = CodeSegs[I].getSymbol();
+      ModInst.addFunc(
+          TypeIdxs[I],
+          (*ModInst.getType(TypeIdxs[I]))->getCompositeType().getFuncType(),
+          std::move(Symbol));
     }
-    ModInst.addFuncAddr(NewFuncInstAddr);
+  } else {
+    // Iterate through the code segments to instantiate function instances.
+    for (uint32_t I = 0; I < CodeSegs.size(); ++I) {
+      // Create and add the function instance into the module instance.
+      ModInst.addFunc(
+          TypeIdxs[I],
+          (*ModInst.getType(TypeIdxs[I]))->getCompositeType().getFuncType(),
+          CodeSegs[I].getLocals(), CodeSegs[I].getExpr().getInstrs());
+    }
   }
   return {};
 }
